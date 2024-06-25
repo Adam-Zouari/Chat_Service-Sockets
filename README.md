@@ -1,5 +1,5 @@
 # Chat_Service-Sockets
-### Project Description:
+### Project Description
 
 -This project consists of a common chat room.
 
@@ -19,7 +19,7 @@
 
 -Connections are well managed, so no problems can arise.
 
-### Note:
+### Notes
 
 -Case sensitive
 
@@ -27,7 +27,7 @@
 
 -A password must be at least 8 characters long and must contain an uppercase letter, a number, and a special character.
 
-#### Example:
+#### Example
 
 ##### username: adam
 
