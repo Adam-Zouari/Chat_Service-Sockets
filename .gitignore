@@ -1,0 +1,6 @@
+*.class
+build/
+.idea/
+.vscode/
+*.log
+server-data/
