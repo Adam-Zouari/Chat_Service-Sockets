@@ -837,7 +837,7 @@ public final class ChatConnectionTest {
         }
 
         void handshake() throws IOException {
-            send("Welcome to Socket Chat!");
+            send("Welcome to SocketChat!");
             send(ChatProtocol.CHOICE_PROMPT);
             check(ChatProtocol.FORM_SESSION_HELLO.equals(read()), "Client did not request session-aware forms protocol");
             send(ChatProtocol.FORM_READY);

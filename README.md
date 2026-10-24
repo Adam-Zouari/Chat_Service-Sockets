@@ -1,43 +1,34 @@
-# Chat_Service-Sockets
+# SocketChat
 
-A shared chat room built with Java TCP sockets and a Swing desktop client. Sign up
-or log in, chat with everyone connected, and receive the latest 500 messages when
-you join. Accounts and recent messages are saved on disk and survive server restarts.
+A Java Swing chat app built with TCP sockets. Create an account, join a shared
+conversation, and keep your recent messages across server restarts. SocketChat
+uses only the Java standard library.
 
-Requires **JDK 11 or newer**. No dependencies or build tool are needed.
+## Features
 
-## Project structure
+- Login and signup forms with optional password visibility.
+- Real-time messaging with timestamps and a live online-user list.
+- Local message search and unread-message counts.
+- Persistent accounts and chat history.
+- Automatic reconnection and session recovery after connection interruptions.
 
-```text
-src/
-  main/java/chat/
-    client/                  Swing UI, chat view, and connection lifecycle
-    server/                  Socket server and persistent storage
-    protocol/                Shared wire protocol and validation
-  test/java/chat/
-    client/                  Client, form, and view regression tests
-    server/                  Server, storage, and session regression tests
-scripts/
-  build.ps1                  PowerShell compile/test script
-  build.sh                   Bash compile/test script
-build/classes/               Generated main/ and test/ classes (ignored)
-server-data/                 Existing saved accounts/history/sessions (ignored)
-README.md
-```
+## Requirements
 
-Java package names match their directories. Production and test classes compile
-separately, and generated files and private server data stay outside `src`.
-The reorganization does not move or change existing `server-data` files.
+- **JDK 11 or newer**, with `java` and `javac` available on `PATH`.
+- A graphical desktop for the Swing client. The server can run without a display.
+- PowerShell or Git Bash on Windows, or Bash on Linux/macOS.
 
-## Run
+## Run locally
 
-From the project directory, compile with PowerShell:
+Run these commands from the project directory.
+
+Build with PowerShell:
 
 ```powershell
 .\scripts\build.ps1
 ```
 
-Or use Bash (Git Bash on Windows, Bash on Linux/macOS):
+Or build with Bash:
 
 ```bash
 bash scripts/build.sh
@@ -49,140 +40,96 @@ Start the server in one terminal:
 java -cp build/classes/main chat.server.ChatServer
 ```
 
-Start a client in another terminal; run it again for more clients:
+Keep that terminal open, then start a client in another terminal:
 
 ```powershell
 java -cp build/classes/main chat.client.ChatClient
 ```
 
-The defaults are `127.0.0.1:1903`. Optional arguments:
+Run the client command again to open more chat windows. The default connection is
+`127.0.0.1:1903`. Stop the server with **Ctrl+C**.
+
+## Use the app
+
+1. Choose **Sign up** to create an account, or **Log in** to use an existing one.
+2. Enter your credentials. Signup also asks for password confirmation; **Show
+   password** lets you check what you typed.
+3. Write a message and press **Enter** or click **Send**.
+4. Use **Search messages** to filter the conversation locally, and **Clear** to
+   show all retained messages. The sidebar updates as people join and leave.
+5. Use **Help** for guidance or **Log out** to return to the authentication form.
+
+If the connection drops, the conversation stays visible while SocketChat
+reconnects automatically. A valid session is restored without entering your
+password again while the same client window stays open. Opening a new client
+window requires login.
+
+## Configuration
+
+Optional arguments let you choose the connection address and storage directory:
+
+```text
+chat.server.ChatServer [port] [bind-address] [data-directory]
+chat.client.ChatClient [host] [port]
+```
+
+For example, use a different local port:
 
 ```powershell
 java -cp build/classes/main chat.server.ChatServer 1904
 java -cp build/classes/main chat.client.ChatClient 127.0.0.1 1904
 ```
 
-Server arguments are `[port] [bind-address] [data-directory]`. The default data
-directory is `server-data` in the current working directory. For example:
+To chat across a trusted LAN, bind the server to its LAN address and connect
+clients to that address. Replace `192.168.1.20` with the server computer's address:
+
+```powershell
+java -cp build/classes/main chat.server.ChatServer 1903 192.168.1.20
+java -cp build/classes/main chat.client.ChatClient 192.168.1.20 1903
+```
+
+SocketChat uses unencrypted TCP and is intended for local or trusted-network use.
+
+## Saved data
+
+The server saves accounts, recent messages, and resumable sessions in
+`server-data/`. Passwords are stored as salted hashes. Keep this directory and
+start the server from the same project directory to restore your data.
+
+You can also choose an explicit storage location:
 
 ```powershell
 java -cp build/classes/main chat.server.ChatServer 1903 127.0.0.1 C:/chat-data
 ```
 
-Restart from the same directory or pass the same data directory to restore your
-accounts and history. Keep this folder when updating or recompiling the app.
+## Project structure
 
-To connect across a trusted LAN, bind the server explicitly and use its LAN IP on
-the other machine:
-
-```powershell
-java -cp build/classes/main chat.server.ChatServer 1903 0.0.0.0
-java -cp build/classes/main chat.client.ChatClient 192.168.1.10 1903
+```text
+src/main/java/chat/
+  client/             Swing interface and connection management
+  server/             Socket server and persistent storage
+  protocol/           Shared message framing and validation
+src/test/java/chat/   Client and server tests
+scripts/              PowerShell and Bash build scripts
+build/                Generated classes and UI previews
+server-data/          Local server data
 ```
 
-Replace the example address with the server's address. The server binds only to
-loopback by default. **TCP traffic, including passwords, is unencrypted**; use a
-trusted network or an encrypted tunnel for remote access. Do not expose this server
-directly to the internet.
+### Main source files
 
-## Use
+| File | Purpose |
+| --- | --- |
+| [ChatClient.java](src/main/java/chat/client/ChatClient.java) | Builds the main window, authentication forms, and message composer. |
+| [ChatConnection.java](src/main/java/chat/client/ChatConnection.java) | Handles socket communication, authentication requests, and automatic reconnection. |
+| [ChatView.java](src/main/java/chat/client/ChatView.java) | Displays messages and online users, with local search and unread counts. |
+| [UiTheme.java](src/main/java/chat/client/UiTheme.java) | Defines shared colors, fonts, and component styling. |
+| [ChatProtocol.java](src/main/java/chat/protocol/ChatProtocol.java) | Defines message framing and validation shared by the client and server. |
+| [ChatServer.java](src/main/java/chat/server/ChatServer.java) | Manages connections, authentication, sessions, and message broadcasts. |
+| [ChatStore.java](src/main/java/chat/server/ChatStore.java) | Saves and loads accounts, chat history, and resumable sessions. |
 
-1. Choose **Log in** or **Sign up** on the authentication form.
-2. Fill in your username and password. Signup also asks you to confirm the password.
-3. Click **Log in** or **Create account**. Passwords are hidden by default; check
-   **Show password** to reveal them temporarily.
-4. Once connected, type a message and press Enter or click **Send**.
+## Tests
 
-Usernames are case-sensitive, 1-32 ASCII letters/numbers/underscores, and must start
-with a letter. `login` and `signup` are reserved, regardless of case. Passwords
-must be 8-128 characters with an uppercase letter, a digit, and a special character
-other than whitespace. Control characters are rejected. Example: username `adam`,
-password `Adam123*` (choose your own password).
-
-Use the form's mode buttons to switch between login and signup. An unfinished
-signup does not reserve its username. Only one session can use an account at a time.
-Passwords are cleared after submission, when changing forms, and on disconnect;
-the desktop client does not save them.
-
-The compact header shows connection status, the server address, **Help**, and
-**Log out**. The light interface uses centered authentication forms, blue primary
-actions, and a fixed-width online-user sidebar with initials. The sidebar
-updates automatically as people connect and leave. After logout you can immediately
-log in again or create another account. Chat input is always message text; former
-slash commands such as `/quit` are sent as ordinary messages.
-
-Messages show the sender and server-recorded date and time above the message body,
-in your local time zone. Text remains selectable and copyable. Messages
-saved before timestamps were introduced remain readable with their original time
-marked as unavailable. The **Search** field filters recent messages locally without
-sending a query to the server. Clear the search to show the whole retained buffer.
-New messages continue to arrive while a search is active.
-
-When another user sends a new message while the window is inactive, its title shows
-the unread count. Focusing the window clears the count. Your own messages and
-replayed history do not count as unread.
-
-If the server stops or the connection fails, the client automatically retries every
-three seconds and restores your signed-in session when the server returns. You do
-not need to enter your password again while that client window remains open and
-its session is valid. The chat stays visible while reconnecting, with sending
-disabled and **Log out** still available. Recovery is automatic; there is no manual
-Refresh button. A small notice explains the interruption, and the user list is
-marked offline until a fresh snapshot arrives.
-
-Session restoration uses a random token kept only in the running client's memory;
-your password is never cached or replayed. Tokens expire seven days after login.
-Expired or invalid sessions return to usable login/signup forms. **Log out**
-forgets the token immediately and revokes it on the server when connected.
-Closing the client also forgets its token, so opening a new window requires login.
-An offline logout still signs out locally even if the server cannot acknowledge it.
-Before your first login, you can fill out the forms while waiting for a connection.
-
-Online-user snapshots are not stored in chat history. Messages can contain
-Unicode and are limited to 2,000 Java characters (UTF-16 code units); blank messages
-and control characters are rejected. The client displays up to 500 entries or
-160,000 characters. Closing its window disconnects it and stops reconnection.
-Stop the server with Ctrl+C.
-
-## Saved data
-
-The server stores salted password hashes in `accounts.bin` and the latest 500 chat
-messages in `messages.bin`, under `server-data` by default. Hashed resume tokens and
-their expiry times are saved separately in `sessions.bin`; raw tokens and passwords
-are never written there. It saves changes before confirming them, uses atomic
-snapshot replacement, and periodically compacts message history. Accounts, recent
-history (including message timestamps), and resumable sessions survive normal restarts and abrupt process
-termination. Existing data directories without `sessions.bin` remain compatible.
-Back up the data directory while the server is stopped.
-
-Only one server may use a data directory at a time. Corrupted files cause a clear
-startup error instead of silently resetting your accounts. If storage fails while
-running, creation/message delivery cannot be confirmed; repair the storage problem
-and restart the server. Existing accounts and history are not automatically erased.
-
-## Limits and implementation
-
-- At most 64 simultaneous connections and 10,000 saved accounts.
-- Authentication must finish within 60 seconds. Five wrong login passwords or
-  20 invalid authentication inputs close that connection; reconnect to try again.
-- Accounts store salted PBKDF2-HMAC-SHA256 password hashes, not plaintext passwords.
-- Session tokens are 256 random bits, with SHA-256 hashes on the server, a seven-day
-  lifetime, and one token per account. A fresh password login replaces any previous
-  token. Resuming an interrupted connection preserves the token and expiry.
-- A bounded queue per connection keeps a slow reader from blocking the room;
-  clients that cannot keep up are disconnected.
-- History replay and live broadcasts share one ordered handoff, avoiding duplicates
-  and missing messages while joining.
-- The protocol is UTF-8 text with LF or CRLF line endings and a 4,096-character
-  physical line limit. Atomic form submissions have explicit success/error responses.
-  Chat messages, history replay, online-user snapshots, and logout use distinct
-  protocol frames. The client and server share framing/limits in
-  `src/main/java/chat/protocol/ChatProtocol.java`.
-  The server still accepts interactive text authentication for simple socket clients.
-
-## Check
-
-Compile with warnings enabled and run all six dependency-free regression harnesses:
+Build and run the test suite with PowerShell:
 
 ```powershell
 .\scripts\build.ps1 -Test
@@ -194,27 +141,11 @@ Or with Bash:
 bash scripts/build.sh --test
 ```
 
-Both scripts compile for Java 11 with UTF-8 and `-Xlint:all`, stop on a failure,
-and keep application classes in `build/classes/main` and tests in
-`build/classes/test`. The scripts locate the project from their own path, so they
-also work when invoked from another directory. Run the `java` commands above from
-the project directory so the default data directory remains the same. Older loose
-`.class` files in `build` are not used by the new classpaths.
+## License
 
-Tests use ephemeral loopback ports, so a running server on port 1903 is unaffected.
-They cover validation, authentication disconnects, simultaneous signup/login,
-session ownership, reconnects, UTF-8/framing, history ordering and limits, connection
-capacity, stalled-reader isolation, forms, button actions, shutdown, persistence after
-restart/abrupt exit, write failures, automatic authenticated recovery, token expiry
-and revocation, logout/login, password visibility, timestamps, live presence,
-local search, unread counts, and form interactions. Networking
-and form tests run headlessly; recovery tests forcibly terminate a real server JVM.
-The UI tests also render login, signup, chat, and reconnect previews as PNG files
-under `build/` for visual inspection.
+Copyright (c) 2026 Adam Zouari.
 
-For a desktop smoke check, open two clients, sign up, exchange messages, and try
-Help and **Log out**. Log in again without reopening the window. Stop and restart the
-server and wait for the client to restore the session and saved history. Check
-that **Show password** reveals and hides both signup password fields. Confirm the
-online list updates when a second client joins or leaves, search filters incoming
-messages, and the unread title count clears when the window regains focus.
+SocketChat's source code and documentation are available under the
+[PolyForm Strict License 1.0.0](LICENSE). It permits noncommercial use under its
+terms and does not grant permission to modify or redistribute the project.
+Other uses require separate permission from the copyright holder.

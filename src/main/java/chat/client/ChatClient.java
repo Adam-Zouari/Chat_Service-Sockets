@@ -38,6 +38,7 @@ import java.util.List;
 
 /** Swing presentation only; socket work and reconnects belong to ChatConnection. */
 public final class ChatClient implements ChatConnection.Listener {
+    private static final String APP_NAME = "SocketChat";
     private static final String HELP_TEXT = "Write a message and press Enter or Send to chat.\n\n"
             + "The sidebar updates automatically as people join and leave.\n"
             + "Search filters recent messages by username or message text on this computer.\n"
@@ -51,12 +52,12 @@ public final class ChatClient implements ChatConnection.Listener {
 
     private final String address;
     private final ChatConnection connection;
-    private final JFrame frame = new JFrame("Socket Chat");
+    private final JFrame frame = new JFrame(APP_NAME);
     private final CardLayout cards = new CardLayout();
     private final JPanel content = new JPanel(cards);
     private final AuthenticationForm authentication = new AuthenticationForm(this::authenticate);
     private final ChatView chatView = new ChatView(count -> frame.setTitle(
-            count == 0 ? "Socket Chat" : "(" + count + ") Socket Chat"));
+            count == 0 ? APP_NAME : "(" + count + ") " + APP_NAME));
     private final JTextField input = new JTextField();
     private final JButton sendButton = new JButton("Send");
     private final JButton logoutButton = new JButton("Log out");
@@ -147,7 +148,7 @@ public final class ChatClient implements ChatConnection.Listener {
         actions.add(helpButton);
         actions.add(logoutButton);
 
-        JLabel brand = new JLabel("Socket Chat");
+        JLabel brand = new JLabel(APP_NAME);
         brand.setFont(UiTheme.HEADING);
         brand.setForeground(UiTheme.TEXT);
         identity.setFont(UiTheme.SMALL);
