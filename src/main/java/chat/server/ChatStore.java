@@ -157,7 +157,7 @@ public final class ChatStore implements AutoCloseable {
     /** Returns only after the account snapshot has been forced to disk and replaced. */
     public synchronized void saveAccount(String username, byte[] salt, byte[] hash) throws IOException {
         ensureOpen();
-        if (!validUsername(username) || salt == null || salt.length != 16 || hash == null || hash.length != 32) {
+        if (!ChatProtocol.validUsername(username) || salt == null || salt.length != 16 || hash == null || hash.length != 32) {
             throw new IllegalArgumentException("Invalid stored account.");
         }
         if (accounts.containsKey(username)) {
@@ -217,15 +217,10 @@ public final class ChatStore implements AutoCloseable {
 
     private void readAccounts() throws IOException {
         Path path = directory.resolve("accounts.bin");
-        // An indeterminate existence check (for example, denied access) must fail closed.
-        if (Files.notExists(path)) {
+        byte[] bytes = readSnapshot(path, MAX_ACCOUNTS_BYTES);
+        if (bytes == null) {
             return;
         }
-        long size = Files.size(path);
-        if (size < 20 || size > MAX_ACCOUNTS_BYTES) {
-            throw corrupt(path, "invalid snapshot size");
-        }
-        byte[] bytes = Files.readAllBytes(path);
         CRC32 checksum = new CRC32();
         checksum.update(bytes, 0, bytes.length - Long.BYTES);
         try (DataInputStream input = new DataInputStream(new ByteArrayInputStream(bytes))) {
@@ -248,7 +243,7 @@ public final class ChatStore implements AutoCloseable {
                 byte[] hash = new byte[32];
                 input.readFully(salt);
                 input.readFully(hash);
-                if (!validUsername(username) || accounts.put(username, new Credential(salt, hash)) != null) {
+                if (!ChatProtocol.validUsername(username) || accounts.put(username, new Credential(salt, hash)) != null) {
                     throw corrupt(path, "invalid or repeated username");
                 }
             }
@@ -316,16 +311,9 @@ public final class ChatStore implements AutoCloseable {
     private void readSessions() throws IOException {
         Path path = directory.resolve("sessions.bin");
         // Older installations have no resume sessions yet.
-        if (Files.notExists(path)) {
+        byte[] bytes = readSnapshot(path, MAX_SESSIONS_BYTES);
+        if (bytes == null) {
             return;
-        }
-        long size = Files.size(path);
-        if (size < 20 || size > MAX_SESSIONS_BYTES) {
-            throw corrupt(path, "invalid session snapshot size");
-        }
-        byte[] bytes = Files.readAllBytes(path);
-        if (bytes.length != size) {
-            throw corrupt(path, "session snapshot changed while loading");
         }
         CRC32 checksum = new CRC32();
         checksum.update(bytes, 0, bytes.length - Long.BYTES);
@@ -335,7 +323,7 @@ public final class ChatStore implements AutoCloseable {
             }
             int count = input.readInt();
             if (count < 0 || count > MAX_ACCOUNTS || count > accounts.size()
-                    || size < 20L + count * 45L || size > 20L + count * 76L) {
+                    || bytes.length < 20L + count * 45L || bytes.length > 20L + count * 76L) {
                 throw corrupt(path, "invalid session count or snapshot size");
             }
             for (int i = 0; i < count; i++) {
@@ -360,6 +348,22 @@ public final class ChatStore implements AutoCloseable {
         } catch (EOFException | CharacterCodingException e) {
             throw corrupt(path, "incomplete or invalid session snapshot", e);
         }
+    }
+
+    private static byte[] readSnapshot(Path path, int maximumBytes) throws IOException {
+        // An indeterminate existence check (for example, denied access) must fail closed.
+        if (Files.notExists(path)) {
+            return null;
+        }
+        long size = Files.size(path);
+        if (size < 20 || size > maximumBytes) {
+            throw corrupt(path, "invalid snapshot size");
+        }
+        byte[] bytes = Files.readAllBytes(path);
+        if (bytes.length != size) {
+            throw corrupt(path, "snapshot changed while loading");
+        }
+        return bytes;
     }
 
     private void truncateTail(long recordStart) throws IOException {
@@ -413,7 +417,7 @@ public final class ChatStore implements AutoCloseable {
     }
 
     private static byte[] encodeMessage(String message) {
-        if (message == null || message.isEmpty() || message.length() > 4096
+        if (message == null || message.isEmpty() || message.length() > ChatProtocol.MAX_LINE_LENGTH
                 || !ChatProtocol.isAllowedText(message)) {
             throw new IllegalArgumentException("Invalid stored message.");
         }
@@ -427,11 +431,6 @@ public final class ChatStore implements AutoCloseable {
     private static String decode(byte[] bytes) throws CharacterCodingException {
         return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString();
-    }
-
-    private static boolean validUsername(String username) {
-        return username != null && username.matches("[A-Za-z][A-Za-z0-9_]{0,31}")
-                && !username.equalsIgnoreCase("login") && !username.equalsIgnoreCase("signup");
     }
 
     private static boolean readFully(FileChannel channel, ByteBuffer buffer) throws IOException {

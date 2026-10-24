@@ -104,7 +104,6 @@ public final class ChatView extends JPanel {
         configureSearch();
 
         JPanel conversation = UiTheme.surfacePanel(new BorderLayout());
-        conversation.setBorder(UiTheme.roundedBorder(UiTheme.BORDER, 8));
         conversation.add(createSearchPanel(), BorderLayout.NORTH);
         conversation.add(messageScroll, BorderLayout.CENTER);
         JPanel columns = new JPanel(new BorderLayout(12, 0));
@@ -135,7 +134,7 @@ public final class ChatView extends JPanel {
         messages.setFont(UiTheme.BODY);
         messages.setForeground(UiTheme.TEXT);
         messages.setBackground(UiTheme.SURFACE);
-        messages.setSelectionColor(new Color(219, 234, 254));
+        messages.setSelectionColor(UiTheme.SELECTION);
         messages.setSelectedTextColor(UiTheme.TEXT);
         messages.setCaretColor(UiTheme.PRIMARY);
         messages.setMargin(new Insets(14, 16, 14, 16));
@@ -257,7 +256,6 @@ public final class ChatView extends JPanel {
         JPanel sidebar = UiTheme.surfacePanel(new BorderLayout());
         sidebar.setPreferredSize(new Dimension(200, 0));
         sidebar.setMinimumSize(new Dimension(190, 0));
-        sidebar.setBorder(UiTheme.roundedBorder(UiTheme.BORDER, 8));
         sidebar.add(presenceHeader, BorderLayout.NORTH);
         sidebar.add(presenceScroll, BorderLayout.CENTER);
         return sidebar;
@@ -270,7 +268,7 @@ public final class ChatView extends JPanel {
         entries.clear();
         characters = 0;
         clearUnread();
-        if (!sameUser) {
+        if (signedInUsername == null || !sameUser) {
             search.setText("");
         }
         render(true);
@@ -279,14 +277,7 @@ public final class ChatView extends JPanel {
     }
 
     void endSession() {
-        username = null;
-        entries.clear();
-        characters = 0;
-        search.setText("");
-        clearUnread();
-        render(true);
-        setReconnecting(false);
-        setPresenceUnavailable();
+        beginSession(null);
     }
 
     void addMessage(ChatProtocol.ChatMessage message, boolean historical) {
@@ -343,15 +334,18 @@ public final class ChatView extends JPanel {
     int unreadCount() { return unread; }
 
     private void clearUnread() {
+        if (unread == 0) {
+            return;
+        }
         unread = 0;
         onUnreadChanged.accept(0);
     }
 
     private void append(Entry entry) {
         entries.addLast(entry);
-        characters += entry.display.length();
+        characters += entry.length;
         while (entries.size() > MAX_MESSAGES || characters > MAX_CHARACTERS) {
-            characters -= entries.removeFirst().display.length();
+            characters -= entries.removeFirst().length;
         }
         render(false);
     }
@@ -413,7 +407,7 @@ public final class ChatView extends JPanel {
         }
         int removedCharacters = 0;
         for (int i = 0; i < removedEntries; i++) {
-            removedCharacters += visible.get(i).display.length();
+            removedCharacters += visible.get(i).length;
         }
         int overlap = visible.size() - removedEntries;
         JScrollBar scrollbar = messageScroll.getVerticalScrollBar();
@@ -529,13 +523,12 @@ public final class ChatView extends JPanel {
         @Override
         public Component getListCellRendererComponent(JList<? extends String> list, String value,
                                                       int index, boolean selected, boolean focused) {
-            setBackground(selected ? new Color(239, 246, 255) : UiTheme.SURFACE);
+            setBackground(selected ? UiTheme.BLUE_TINT : UiTheme.SURFACE);
             setBorder(BorderFactory.createCompoundBorder(
                     BorderFactory.createMatteBorder(0, 0, 1, 0, focused ? UiTheme.PRIMARY : UiTheme.BORDER),
                     BorderFactory.createEmptyBorder(7, 12, 7, 12)));
             avatar.setIcon(new AvatarIcon(value));
             name.setText(value);
-            name.setToolTipText(value);
             setToolTipText(value);
             self.setText(Objects.equals(value, username) ? "you" : "");
             getAccessibleContext().setAccessibleName(value + (Objects.equals(value, username) ? ", you" : ""));
@@ -594,7 +587,7 @@ public final class ChatView extends JPanel {
     }
 
     private static final class Entry {
-        final String display;
+        final int length;
         final String searchable;
         final boolean chat;
         final String author;
@@ -605,18 +598,13 @@ public final class ChatView extends JPanel {
             this.author = author;
             this.timestamp = timestamp;
             this.body = body;
-            display = author + "   " + timestamp + "\n" + body + "\n\n";
-            searchable = (author + "\n" + body).toLowerCase(Locale.ROOT);
-            chat = true;
+            chat = author != null;
+            length = body.length() + 2 + (chat ? author.length() + timestamp.length() + 4 : 0);
+            searchable = chat ? (author + "\n" + body).toLowerCase(Locale.ROOT) : "";
         }
 
         Entry(String notice) {
-            author = "";
-            timestamp = "";
-            body = notice;
-            display = notice + "\n\n";
-            searchable = "";
-            chat = false;
+            this(null, null, notice);
         }
     }
 }

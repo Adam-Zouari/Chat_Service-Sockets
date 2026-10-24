@@ -20,8 +20,6 @@ src/
 scripts/
   build.ps1                  PowerShell compile/test script
   build.sh                   Bash compile/test script
-docs/
-  AUDIT.md                   Audit findings and verification notes
 build/classes/               Generated main/ and test/ classes (ignored)
 server-data/                 Existing saved accounts/history/sessions (ignored)
 README.md
@@ -220,5 +218,3 @@ server and wait for the client to restore the session and saved history. Check
 that **Show password** reveals and hides both signup password fields. Confirm the
 online list updates when a second client joins or leaves, search filters incoming
 messages, and the unread title count clears when the window regains focus.
-
-See [docs/AUDIT.md](docs/AUDIT.md) for the original findings and fixes.

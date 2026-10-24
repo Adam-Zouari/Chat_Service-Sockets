@@ -39,13 +39,14 @@ public final class ChatConnectionTest {
         System.setProperty("java.awt.headless", "true");
         run("forms, rejected credentials, UTF-8 and literal command text", ChatConnectionTest::authentication);
         run("logout returns to forms and permits signup and login", ChatConnectionTest::quitAndLogin);
-        run("refresh discards old session events and credentials", ChatConnectionTest::refresh);
+        run("logout discards queued events from the previous session", ChatConnectionTest::logoutDiscardsEvents);
         run("server restart reconnects automatically without replaying credentials", ChatConnectionTest::restart);
-        run("session resumes after disconnect and Refresh without a password", ChatConnectionTest::resume);
+        run("session resumes after disconnect without a password", ChatConnectionTest::resume);
         run("rejected and expired sessions restore usable login forms", ChatConnectionTest::resumeFallback);
         run("logout revokes the session before reconnecting and never resumes", ChatConnectionTest::sessionLogout);
         run("logout timeout and offline logout keep the forms usable", ChatConnectionTest::logoutRecovery);
         run("session frames stay secret and malformed frames are rejected", ChatConnectionTest::sessionFrames);
+        run("malformed and repeated authentication controls close the connection", ChatConnectionTest::malformedAuthenticationFrames);
         run("initial failure retries and closing cancels retries", ChatConnectionTest::initialFailureAndClose);
         run("large history drains in order without flooding Swing", ChatConnectionTest::history);
         run("structured history and live messages retain timestamps and update presence", ChatConnectionTest::structuredMessages);
@@ -130,7 +131,7 @@ public final class ChatConnectionTest {
         }
     }
 
-    private static void refresh() throws Exception {
+    private static void logoutDiscardsEvents() throws Exception {
         Events events = new Events();
         CountDownLatch releaseEdt = new CountDownLatch(1);
         try (StubServer server = new StubServer(0);
@@ -149,16 +150,18 @@ public final class ChatConnectionTest {
             });
             check(blockedEdt.await(5, TimeUnit.SECONDS), "Could not pause EDT");
             first.send("stale old session message");
-            connection.refresh();
-            check(first.read() == null, "Refresh kept old session open");
+            connection.logout();
+            check(ChatProtocol.LOGOUT.equals(first.read()), "Logout request was not sent");
+            first.send("Goodbye.");
+            check(first.read() == null, "Logout kept old session open");
             Peer second = server.accept();
             second.handshake();
             releaseEdt.countDown();
             events.await("ready");
             second.noInput();
             SwingUtilities.invokeAndWait(() -> { });
-            check(!events.recorded.contains("message:stale old session message"), "Old message crossed a refresh");
-            check(connection.authenticate(false, "Alice", PASSWORD.toCharArray()), "Refresh did not restore login");
+            check(!events.recorded.contains("message:stale old session message"), "Old message crossed a logout");
+            check(connection.authenticate(false, "Alice", PASSWORD.toCharArray()), "Logout did not restore login");
             checkAuth(second.read(), false, "Alice", PASSWORD);
             second.authenticated("Alice");
             events.await("authenticated:Alice");
@@ -242,12 +245,7 @@ public final class ChatConnectionTest {
             events.await("message:session restored");
             check(connection.sendMessage("back online"), "Resumed session cannot send");
             check((ChatProtocol.SEND_PREFIX + "back online").equals(second.read()), "Resumed message was lost");
-            connection.refresh();
-            check(connection.canResumeSession(), "Refresh forgot a still valid session");
-            check(second.read() == null, "Refresh kept the old socket open");
-            Peer third = server.accept();
-            resumeSession(third, events, expiry);
-            third.noInput();
+            second.noInput();
             check(events.recorded.stream().filter(value -> value.equals("ready")).count() == 1,
                     "Login forms were enabled during automatic resume");
             check(events.recorded.stream().noneMatch(value -> value.contains(TOKEN)), "Session token leaked to the UI");
@@ -265,7 +263,8 @@ public final class ChatConnectionTest {
             connection.start();
             Peer first = server.accept();
             loginWithSession(connection, first, events, expiry);
-            connection.refresh();
+            first.close();
+            events.awaitPrefix("disconnected:");
             Peer second = server.accept();
             second.handshake();
             checkResume(second.read());
@@ -280,7 +279,8 @@ public final class ChatConnectionTest {
             second.authenticated("Alice");
             events.await("authenticated:Alice");
             check(!connection.canResumeSession(), "Already expired session was still resumable");
-            connection.refresh();
+            second.close();
+            events.awaitPrefix("disconnected:");
             Peer third = server.accept();
             third.handshake();
             events.await("ready");
@@ -289,7 +289,8 @@ public final class ChatConnectionTest {
             checkAuth(third.read(), false, "Alice", PASSWORD);
             third.send(ChatProtocol.FORM_ERROR_PREFIX + "Wrong password.");
             events.await("error:Wrong password.");
-            connection.refresh();
+            third.close();
+            events.awaitPrefix("disconnected:");
             Peer fourth = server.accept();
             fourth.handshake();
             events.await("ready");
@@ -374,8 +375,8 @@ public final class ChatConnectionTest {
             connection.start();
             Peer first = server.accept();
             loginWithSession(connection, first, events, System.currentTimeMillis() + 60_000);
-            connection.refresh();
-            events.await("disconnected:Refreshing the connection.");
+            first.close();
+            events.awaitPrefix("disconnected:");
             Peer second = server.accept();
             second.handshake();
             checkResume(second.read());
@@ -384,6 +385,35 @@ public final class ChatConnectionTest {
             check(events.recorded.stream().filter(value -> value.equals("authenticated:Alice")).count() == 1,
                     "Resume accepted success without its matching session response");
             check(connection.canResumeSession(), "An invalid server response erased the valid local session");
+        }
+    }
+
+    private static void malformedAuthenticationFrames() throws Exception {
+        for (boolean authenticated : Arrays.asList(false, true)) {
+            for (String frame : Arrays.asList("@ready", "@ready extra", "@ok", "@ok extra",
+                    "@error", "@error extra", "@session", "@session extra")) {
+                Events events = new Events();
+                try (StubServer server = new StubServer(0);
+                     ChatConnection connection = new ChatConnection("127.0.0.1", server.port(), events)) {
+                    connection.start();
+                    Peer peer = server.accept();
+                    peer.handshake();
+                    events.await("ready");
+                    check(connection.authenticate(false, "Alice", PASSWORD.toCharArray()), "Could not begin login");
+                    checkAuth(peer.read(), false, "Alice", PASSWORD);
+                    if (authenticated) {
+                        peer.authenticated("Alice");
+                        events.await("authenticated:Alice");
+                    }
+                    peer.send(frame);
+                    events.awaitPrefix("disconnected:");
+                    check(events.recorded.stream().noneMatch(value -> value.equals("message:" + frame)),
+                            "Authentication control reached the chat: " + frame);
+                    check(events.recorded.stream().filter(value -> value.equals("authenticated:Alice")).count()
+                                    == (authenticated ? 1 : 0),
+                            "Malformed authentication frame was accepted");
+                }
+            }
         }
     }
 

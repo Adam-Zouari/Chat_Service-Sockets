@@ -145,7 +145,7 @@ public final class ChatProtocol {
                 && !username.equalsIgnoreCase("login") && !username.equalsIgnoreCase("signup");
     }
 
-    public static boolean validPassword(String password) {
+    public static boolean validPassword(CharSequence password) {
         if (password == null || password.length() < 8 || password.length() > MAX_PASSWORD_LENGTH
                 || !isAllowedText(password)) {
             return false;
@@ -194,7 +194,7 @@ public final class ChatProtocol {
         return line.length() == 0 ? null : line.toString();
     }
 
-    public static boolean isAllowedText(String text) {
+    public static boolean isAllowedText(CharSequence text) {
         for (int i = 0; i < text.length(); i++) {
             char ch = text.charAt(i);
             if (Character.isISOControl(ch) || ch == '\u2028' || ch == '\u2029') {

@@ -8,6 +8,7 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.nio.CharBuffer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -78,11 +79,6 @@ public final class ChatConnection implements AutoCloseable {
         }
     }
 
-    /** Replaces even a connecting or stalled connection immediately. */
-    public void refresh() {
-        reconnect("Refreshing the connection.");
-    }
-
     /** Whether this open window can restore its signed-in identity without a password. */
     public boolean canResumeSession() {
         synchronized (lock) {
@@ -115,30 +111,25 @@ public final class ChatConnection implements AutoCloseable {
                 signingOut.logoutTimeout = retries.schedule(() -> {
                     synchronized (lock) {
                         if (isCurrentLocked(signingOut)) {
-                            reconnect("Signed out.");
+                            reconnectLocked();
                         }
                     }
                 }, LOGOUT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             } else {
-                reconnect("Signed out.");
+                reconnectLocked();
             }
         }
     }
 
-    private void reconnect(String reason) {
-        synchronized (lock) {
-            if (closed) {
-                return;
-            }
-            started = true;
-            cancelRetryLocked();
-            closeSessionLocked();
-            generation++;
-            events.clear();
-            lock.notifyAll();
-            postLocked(() -> listener.onDisconnected(reason));
-            connectLocked();
-        }
+    private void reconnectLocked() {
+        started = true;
+        cancelRetryLocked();
+        closeSessionLocked();
+        generation++;
+        events.clear();
+        lock.notifyAll();
+        postLocked(() -> listener.onDisconnected("Signed out."));
+        connectLocked();
     }
 
     /** Consumes the password synchronously; callers may clear their char[] immediately. */
@@ -158,14 +149,14 @@ public final class ChatConnection implements AutoCloseable {
                 postLocked(() -> listener.onAuthenticationError("Enter a password of at most 128 characters."));
                 return false;
             }
-            String secret = new String(password);
-            if (!ChatProtocol.isAllowedText(secret) || (signup && !ChatProtocol.validPassword(secret))) {
+            CharBuffer secret = CharBuffer.wrap(password);
+            if (signup ? !ChatProtocol.validPassword(secret) : !ChatProtocol.isAllowedText(secret)) {
                 postLocked(() -> listener.onAuthenticationError(
                         "Password needs 8-128 characters, an uppercase letter, a digit and a special character."));
                 return false;
             }
             String frame = ChatProtocol.FORM_AUTH_PREFIX + (signup ? "signup" : "login") + "\t"
-                    + ChatProtocol.encodeField(username) + "\t" + ChatProtocol.encodeField(secret);
+                    + ChatProtocol.encodeField(username) + "\t" + ChatProtocol.encodeField(secret.toString());
             if (!session.outgoing.offer(frame)) {
                 postLocked(() -> listener.onAuthenticationError("Connection is busy. Please try again."));
                 return false;
@@ -181,8 +172,7 @@ public final class ChatConnection implements AutoCloseable {
             if (closed || session == null || !session.authenticated || text == null) {
                 return false;
             }
-            if (text.isBlank() || text.length() > ChatProtocol.MAX_MESSAGE_LENGTH
-                    || !ChatProtocol.isAllowedText(text)) {
+            if (!ChatProtocol.validMessage(text)) {
                 postLocked(() -> listener.onStatus("Messages need 1-2000 characters without control characters."));
                 return false;
             }
@@ -273,7 +263,7 @@ public final class ChatConnection implements AutoCloseable {
     private void handleLineLocked(Session current, String line) throws IOException {
         if (current.logoutPending) {
             if (line.equals("Goodbye.")) {
-                reconnect("Signed out.");
+                reconnectLocked();
             }
             return;
         }
@@ -284,7 +274,7 @@ public final class ChatConnection implements AutoCloseable {
             String[] fields = line.substring(ChatProtocol.FORM_SESSION_PREFIX.length()).split("\t", -1);
             long expiry;
             try {
-                if (fields.length != 2 || !fields[0].matches("[A-Za-z0-9_-]{43}")) {
+                if (fields.length != 2 || !ChatProtocol.validSessionToken(fields[0])) {
                     throw new NumberFormatException();
                 }
                 expiry = Long.parseLong(fields[1]);
@@ -324,7 +314,10 @@ public final class ChatConnection implements AutoCloseable {
         if (!ChatProtocol.isAllowedText(content)) {
             throw new IOException("The server sent invalid text.");
         }
-        if (line.equals(ChatProtocol.FORM_READY) && !current.ready) {
+        if (line.equals(ChatProtocol.FORM_READY)) {
+            if (current.ready) {
+                throw new IOException("Unexpected ready response.");
+            }
             current.ready = true;
             if (rememberedToken != null && rememberedExpiry > System.currentTimeMillis()) {
                 current.outgoing.add(ChatProtocol.FORM_RESUME_PREFIX + rememberedUsername + "\t" + rememberedToken);
@@ -372,6 +365,9 @@ public final class ChatConnection implements AutoCloseable {
                 postLocked(listener::onReady);
             }
             postLocked(() -> listener.onAuthenticationError(error));
+        } else if (line.startsWith("@ready") || line.startsWith("@ok")
+                || line.startsWith("@error") || line.startsWith("@session")) {
+            throw new IOException("Invalid authentication response.");
         } else if (current.authenticated) {
             postLocked(() -> listener.onMessage(line));
         }
@@ -439,7 +435,7 @@ public final class ChatConnection implements AutoCloseable {
                 return;
             }
             if (current.logoutPending) {
-                reconnect("Signed out.");
+                reconnectLocked();
                 return;
             }
             closeSessionLocked();
@@ -497,8 +493,8 @@ public final class ChatConnection implements AutoCloseable {
     }
 
     private void postLocked(Runnable action) {
-        // Normal incoming traffic leaves room for control events. Repeated local
-        // status updates may be coalesced if a caller temporarily outruns Swing.
+        // Normal incoming traffic leaves room for control events. Excess local
+        // status updates may be dropped if a caller temporarily outruns Swing.
         if (events.size() == MAX_EVENTS) {
             return;
         }
@@ -520,7 +516,7 @@ public final class ChatConnection implements AutoCloseable {
                     }
                     if (!closed && event.generation == generation) {
                         // Holding lock through the callback prevents a background
-                        // refresh/close from delivering an event from an old session.
+                        // logout/close from delivering an event from an old session.
                         event.action.run();
                     }
                 }

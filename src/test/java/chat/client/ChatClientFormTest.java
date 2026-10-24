@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /** Headless Swing interaction tests; no JFrame, reflective access, or network needed. */
@@ -65,6 +66,9 @@ public final class ChatClientFormTest {
         visibility.doClick();
         check(password.getEchoChar() != 0 && confirm.getEchoChar() != 0,
                 "Unchecking Show password must mask both fields");
+        login.doClick();
+        check(Arrays.equals(password.getPassword(), "SecurePassword9!".toCharArray()),
+                "Clicking the active login mode must retain entered credentials");
         render(form, "auth-login.png");
         checkFormFits(form);
 
@@ -80,6 +84,10 @@ public final class ChatClientFormTest {
 
         password.setText("SecurePassword9!");
         confirm.setText("SecurePassword9!");
+        signup.doClick();
+        check(Arrays.equals(password.getPassword(), confirm.getPassword())
+                        && password.getPassword().length > 0,
+                "Clicking the active signup mode must retain both passwords");
         form.setAvailability(true, false);
         render(form, "auth-signup.png");
         form.setError("That username is already in use. Choose another username, or switch to Log in "
@@ -139,8 +147,16 @@ public final class ChatClientFormTest {
         check(ChatClient.validateCredentials(false, "Alice", new char[0], good) != null, "Empty password accepted");
         check(ChatClient.validateCredentials(true, "Alice", "short".toCharArray(), "short".toCharArray()) != null,
                 "Weak signup password accepted");
-        check(ChatClient.validateCredentials(false, "Alice", "Secret\n9!".toCharArray(), good) != null,
-                "Password containing a newline accepted");
+        for (String invalid : new String[]{"Secret\n9!", "Secret\t9!", "Secret\u20289!", "Secret\u20299!",
+                "Secret\ud83d9!", "Secret\ude049!"}) {
+            check(ChatClient.validateCredentials(false, "Alice", invalid.toCharArray(), good) != null,
+                    "Password containing a control character or malformed surrogate accepted");
+        }
+        char[] unicode = "SecurePassword9!\ud83d\ude04".toCharArray();
+        check(ChatClient.validateCredentials(true, "Alice", unicode, unicode) == null,
+                "Valid supplementary Unicode password rejected");
+        check(Arrays.equals(unicode, "SecurePassword9!\ud83d\ude04".toCharArray()),
+                "Validation must leave password clearing to the caller");
     }
 
     private static <T extends Component> T named(Container parent, String name, Class<T> type) {

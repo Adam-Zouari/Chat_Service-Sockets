@@ -32,6 +32,7 @@ import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.nio.CharBuffer;
 import java.util.Arrays;
 import java.util.List;
 
@@ -189,7 +190,6 @@ public final class ChatClient implements ChatConnection.Listener {
     }
 
     private JPanel createChatPanel() {
-
         input.setToolTipText("Write a message and press Enter or Send.");
         input.getAccessibleContext().setAccessibleName("Message");
         UiTheme.styleInput(input);
@@ -251,20 +251,13 @@ public final class ChatClient implements ChatConnection.Listener {
         if (password.length == 0) {
             return "Enter your password.";
         }
-        if (password.length > ChatProtocol.MAX_PASSWORD_LENGTH || !allowedPassword(password)) {
+        CharBuffer secret = CharBuffer.wrap(password);
+        if (password.length > ChatProtocol.MAX_PASSWORD_LENGTH || !ChatProtocol.isAllowedText(secret)) {
             return "Use at most " + ChatProtocol.MAX_PASSWORD_LENGTH
                     + " password characters, without control characters.";
         }
         if (signup) {
-            boolean uppercase = false;
-            boolean digit = false;
-            boolean special = false;
-            for (char ch : password) {
-                uppercase |= Character.isUpperCase(ch);
-                digit |= Character.isDigit(ch);
-                special |= !Character.isLetterOrDigit(ch) && !Character.isWhitespace(ch);
-            }
-            if (password.length < 8 || !uppercase || !digit || !special) {
+            if (!ChatProtocol.validPassword(secret)) {
                 return "Use 8-128 characters with an uppercase letter, a number and a symbol.";
             }
             if (!Arrays.equals(password, confirmation)) {
@@ -274,47 +267,26 @@ public final class ChatClient implements ChatConnection.Listener {
         return null;
     }
 
-    private static boolean allowedPassword(char[] password) {
-        for (int i = 0; i < password.length; i++) {
-            char ch = password[i];
-            if (Character.isISOControl(ch) || ch == '\u2028' || ch == '\u2029') {
-                return false;
-            }
-            if (Character.isHighSurrogate(ch)) {
-                if (++i == password.length || !Character.isLowSurrogate(password[i])) {
-                    return false;
-                }
-            } else if (Character.isLowSurrogate(ch)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     private void sendInput() {
-        if (sendMessage(input.getText())) {
-            input.setText("");
-        }
-    }
-
-    private boolean sendMessage(String text) {
         if (closed || !authenticated) {
-            return false;
+            return;
         }
+        String text = input.getText();
         if (text.isBlank()) {
             setNotice("Enter a message.");
-            return false;
+            return;
         }
         if (text.length() > ChatProtocol.MAX_MESSAGE_LENGTH || !ChatProtocol.isAllowedText(text)) {
             setNotice("Use at most " + ChatProtocol.MAX_MESSAGE_LENGTH
                     + " characters, without control characters.");
-            return false;
+            return;
         }
         if (!connection.sendMessage(text)) {
             setNotice("Sending is busy. Wait a moment and try again.");
-            return false;
+            return;
         }
-        return true;
+        input.setText("");
+        setNotice("");
     }
 
     private void showHelp() {
@@ -338,7 +310,6 @@ public final class ChatClient implements ChatConnection.Listener {
         authenticated = false;
         reconnectingSession = false;
         chatView.endSession();
-        chatView.setReconnecting(false);
         identity.setText("A simple place to connect.");
         identity.setToolTipText(null);
         if (clearSecrets) {
@@ -411,7 +382,6 @@ public final class ChatClient implements ChatConnection.Listener {
         chatView.setWindowFocused(frame.isFocused());
         identity.setText("General chat  \u00b7  " + username);
         identity.setToolTipText("Signed in as " + username);
-        chatView.setReconnecting(false);
         input.setEnabled(true);
         sendButton.setEnabled(true);
         logoutButton.setEnabled(true);
@@ -571,8 +541,7 @@ public final class ChatClient implements ChatConnection.Listener {
             modeButtons.setOpaque(false);
             modeButtons.add(loginMode);
             modeButtons.add(signupMode);
-            loginMode.addActionListener(event -> changeMode());
-            signupMode.addActionListener(event -> changeMode());
+            signupMode.addItemListener(event -> changeMode());
 
             JPanel form = UiTheme.surfacePanel(new GridBagLayout());
             form.setName("authenticationCard");

@@ -40,7 +40,8 @@ final class UiTheme {
     static final Color SUCCESS = new Color(0x16A34A);
     static final Color WARNING = new Color(0xD97706);
     static final Color ERROR = new Color(0xDC2626);
-    private static final Color BLUE_TINT = new Color(0xEFF6FF);
+    static final Color BLUE_TINT = new Color(0xEFF6FF);
+    static final Color SELECTION = new Color(0xDBEAFE);
     private static final Color DISABLED = new Color(0xE8EDF4);
     private static final String FONT_FAMILY = Arrays.asList(GraphicsEnvironment.getLocalGraphicsEnvironment()
             .getAvailableFontFamilyNames()).contains("Segoe UI") ? "Segoe UI" : Font.SANS_SERIF;
@@ -68,8 +69,8 @@ final class UiTheme {
         UIManager.put("TextPane.font", BODY);
         UIManager.put("TextField.foreground", TEXT);
         UIManager.put("PasswordField.foreground", TEXT);
-        UIManager.put("TextField.selectionBackground", new Color(0xDBEAFE));
-        UIManager.put("PasswordField.selectionBackground", new Color(0xDBEAFE));
+        UIManager.put("TextField.selectionBackground", SELECTION);
+        UIManager.put("PasswordField.selectionBackground", SELECTION);
         UIManager.put("TextField.caretForeground", PRIMARY);
         UIManager.put("PasswordField.caretForeground", PRIMARY);
         UIManager.put("List.font", BODY);
@@ -116,7 +117,7 @@ final class UiTheme {
         field.setForeground(TEXT);
         field.setBackground(SURFACE);
         field.setCaretColor(PRIMARY);
-        field.setSelectionColor(new Color(0xDBEAFE));
+        field.setSelectionColor(SELECTION);
         field.setSelectedTextColor(TEXT);
         field.setBorder(new InputBorder());
         field.setPreferredSize(new Dimension(field.getPreferredSize().width, 38));
@@ -228,7 +229,10 @@ final class UiTheme {
         RoundedBorder(Color color, int radius) { this.color = color; this.radius = radius; }
 
         @Override
-        public Insets getBorderInsets(java.awt.Component component) { return new Insets(1, 1, 1, 1); }
+        public Insets getBorderInsets(java.awt.Component component, Insets insets) {
+            insets.set(1, 1, 1, 1);
+            return insets;
+        }
 
         @Override
         public void paintBorder(java.awt.Component component, Graphics graphics, int x, int y, int width, int height) {
@@ -244,7 +248,10 @@ final class UiTheme {
         private static final long serialVersionUID = 1L;
 
         @Override
-        public Insets getBorderInsets(java.awt.Component component) { return new Insets(8, 12, 8, 12); }
+        public Insets getBorderInsets(java.awt.Component component, Insets insets) {
+            insets.set(8, 12, 8, 12);
+            return insets;
+        }
 
         @Override
         public void paintBorder(java.awt.Component component, Graphics graphics, int x, int y, int width, int height) {

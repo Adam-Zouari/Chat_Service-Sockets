@@ -6,6 +6,7 @@ import javax.imageio.ImageIO;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JList;
+import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
@@ -18,6 +19,7 @@ import javax.swing.text.StyledDocument;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Graphics2D;
+import java.awt.Insets;
 import java.awt.RenderingHints;
 import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
@@ -42,6 +44,7 @@ public final class ChatViewTest {
         System.setProperty("java.awt.headless", "true");
         SwingUtilities.invokeAndWait(() -> {
             UiTheme.install();
+            themeInsets();
             timestampsAndSearch();
             retention();
             unread();
@@ -67,6 +70,18 @@ public final class ChatViewTest {
         ChatView view = new ChatView(count -> { }, ZoneId.of("Africa/Tunis"));
         view.beginSession("Alice");
         return view;
+    }
+
+    private static void themeInsets() {
+        JTextField input = new JTextField();
+        UiTheme.styleInput(input);
+        check(input.getInsets().equals(new Insets(8, 12, 8, 12))
+                        && input.getInsets().equals(input.getInsets(new Insets(0, 0, 0, 0))),
+                "Input padding must be consistent across Swing's inset lookup methods");
+        JPanel surface = UiTheme.surfacePanel(new java.awt.BorderLayout());
+        check(surface.getInsets().equals(new Insets(1, 1, 1, 1))
+                        && surface.getInsets().equals(surface.getInsets(new Insets(0, 0, 0, 0))),
+                "Surface padding must be consistent across Swing's inset lookup methods");
     }
 
     private static void timestampsAndSearch() {

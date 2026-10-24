@@ -272,22 +272,10 @@ public final class ChatServer implements AutoCloseable {
         }
     }
 
-    private static boolean validUsername(String username) {
-        return ChatProtocol.validUsername(username);
-    }
-
-    private static boolean validPassword(String password) {
-        return ChatProtocol.validPassword(password);
-    }
-
-    private void disconnectSlowClients(List<ClientHandler> failed) {
-        failed.forEach(ClientHandler::close);
-    }
-
     /** Call with stateLock held; each client sees the same event order. */
-    private void broadcastLocked(String message, ClientHandler except, List<ClientHandler> failed) {
+    private void broadcastLocked(String message, List<ClientHandler> failed) {
         for (ClientHandler client : clients.values()) {
-            if (client != except && !client.outgoing.offer(message)) {
+            if (!client.outgoing.offer(message)) {
                 failed.add(client);
             }
         }
@@ -391,9 +379,9 @@ public final class ChatServer implements AutoCloseable {
                                 history.removeFirst();
                             }
                             history.addLast(entry);
-                            broadcastLocked(ChatProtocol.encodeMessage(entry), null, failed);
+                            broadcastLocked(ChatProtocol.encodeMessage(entry), failed);
                         }
-                        disconnectSlowClients(failed);
+                        failed.forEach(ClientHandler::close);
                     }
                 }
             } catch (IOException e) {
@@ -407,10 +395,10 @@ public final class ChatServer implements AutoCloseable {
                 List<ClientHandler> failed = new ArrayList<>();
                 synchronized (stateLock) {
                     if (username != null && clients.remove(username, this) && !closed) {
-                        broadcastLocked(onlineUsersLocked(), null, failed);
+                        broadcastLocked(onlineUsersLocked(), failed);
                     }
                 }
-                disconnectSlowClients(failed);
+                failed.forEach(ClientHandler::close);
                 if (drainOutput && sender != null && outgoing.offer(endOfOutput)) {
                     try {
                         sender.join(1000);
@@ -460,7 +448,7 @@ public final class ChatServer implements AutoCloseable {
                     send(ChatProtocol.CHOICE_PROMPT);
                 } else if (candidateName == null) {
                     String error = null;
-                    if (!validUsername(input)) {
+                    if (!ChatProtocol.validUsername(input)) {
                         error = "Use 1-32 letters, numbers or _, starting with a letter; login/signup are reserved.";
                     } else {
                         synchronized (stateLock) {
@@ -487,7 +475,7 @@ public final class ChatServer implements AutoCloseable {
                 } else {
                     PasswordHash credential;
                     if (mode.equals("signup")) {
-                        if (!validPassword(input)) {
+                        if (!ChatProtocol.validPassword(input)) {
                             if (!invalid("Password needs 8-128 characters, an uppercase letter, a digit and a special character.")) {
                                 return false;
                             }
@@ -561,10 +549,10 @@ public final class ChatServer implements AutoCloseable {
                         error = "Invalid authentication request. Please try again.";
                     }
                 }
-                if (error == null && !validUsername(name)) {
+                if (error == null && !ChatProtocol.validUsername(name)) {
                     error = "Use 1-32 letters, numbers or _, starting with a letter; login/signup are reserved.";
                 }
-                if (error == null && !validPassword(password)) {
+                if (error == null && !ChatProtocol.validPassword(password)) {
                     error = "Password needs 8-128 characters, an uppercase letter, a digit and a special character.";
                 }
                 PasswordHash credential = null;
@@ -654,13 +642,13 @@ public final class ChatServer implements AutoCloseable {
                 }
                 publishSessionLocked(name, form, token, resume, failed);
             }
-            disconnectSlowClients(failed);
+            failed.forEach(ClientHandler::close);
             return null;
         }
 
         /** A valid bearer token may replace its own half-open connection, never another account. */
         private String resumeSession(String name, String token) {
-            if (!validUsername(name) || !ChatProtocol.validSessionToken(token)) {
+            if (!ChatProtocol.validUsername(name) || !ChatProtocol.validSessionToken(token)) {
                 return "Invalid session. Please log in again.";
             }
             List<ClientHandler> failed = new ArrayList<>();
@@ -679,7 +667,7 @@ public final class ChatServer implements AutoCloseable {
                 }
                 publishSessionLocked(name, true, token, resume, failed);
             }
-            disconnectSlowClients(failed);
+            failed.forEach(ClientHandler::close);
             return null;
         }
 
@@ -708,7 +696,7 @@ public final class ChatServer implements AutoCloseable {
                 failed.add(this);
             }
             clients.put(username, this);
-            broadcastLocked(onlineUsersLocked(), null, failed);
+            broadcastLocked(onlineUsersLocked(), failed);
         }
 
         private boolean revokeSession() {
