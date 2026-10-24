@@ -9,10 +9,17 @@ import javax.swing.JList;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
+import javax.swing.JTextPane;
 import javax.swing.SwingUtilities;
+import javax.swing.text.AttributeSet;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.StyleConstants;
+import javax.swing.text.StyledDocument;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.geom.Rectangle2D;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -34,11 +41,13 @@ public final class ChatViewTest {
     public static void main(String[] args) throws Exception {
         System.setProperty("java.awt.headless", "true");
         SwingUtilities.invokeAndWait(() -> {
+            UiTheme.install();
             timestampsAndSearch();
             retention();
             unread();
             presence();
             selection();
+            presentationAndRecovery();
             prepareScrollTest();
         });
         // Let queued Swing layout and initial scroll-follow work finish first.
@@ -51,7 +60,7 @@ public final class ChatViewTest {
         System.out.println("PASS unread counts exclude own messages, replay and notices and reset on focus/logout");
         System.out.println("PASS live presence snapshots, counts and clearing disconnected users");
         System.out.println("PASS incoming messages preserve copy selections and older scroll positions");
-        System.out.println("PASS headless chat rendering at the minimum window width");
+        System.out.println("PASS structured selectable messages, literal content and responsive recovery presentation");
     }
 
     private static ChatView view() {
@@ -62,40 +71,40 @@ public final class ChatViewTest {
 
     private static void timestampsAndSearch() {
         ChatView view = view();
-        JTextArea messages = named(view, "messages", JTextArea.class);
+        JTextPane messages = named(view, "messages", JTextPane.class);
         JTextField search = named(view, "searchMessages", JTextField.class);
         JLabel results = named(view, "searchStatus", JLabel.class);
         view.addMessage(message("Alice", "Hello café"), true);
         view.addMessage(new ChatProtocol.ChatMessage(0, "Bob", "An older message"), true);
-        check(messages.getText().contains("[2026-10-24 13:34] Alice: Hello café"),
+        check(text(messages).contains("Alice   2026-10-24 13:34\nHello café"),
                 "Messages must use their server timestamp in the local timezone");
-        check(messages.getText().contains("[Earlier] Bob: An older message"),
+        check(text(messages).contains("Bob   Earlier\nAn older message"),
                 "Untimed legacy messages must not invent a timestamp");
         search.setText("CAFÉ");
-        check(messages.getText().contains("Hello café") && !messages.getText().contains("An older message"),
+        check(text(messages).contains("Hello café") && !text(messages).contains("An older message"),
                 "Search must match message bodies case-insensitively");
         search.setText("bOB");
-        check(messages.getText().contains("An older message") && !messages.getText().contains("Hello café"),
+        check(text(messages).contains("An older message") && !text(messages).contains("Hello café"),
                 "Search must match usernames case-insensitively");
         view.addMessage(message("Alice", "Other conversation"), false);
-        check(search.getText().equals("bOB") && !messages.getText().contains("Other conversation"),
+        check(search.getText().equals("bOB") && !text(messages).contains("Other conversation"),
                 "New nonmatching messages must not clear the current filter");
         view.addMessage(message("Bob", "A matching arrival"), false);
-        check(messages.getText().contains("A matching arrival") && results.getText().equals("Showing 2 of 4 messages"),
+        check(text(messages).contains("A matching arrival") && results.getText().equals("Showing 2 of 4 messages"),
                 "Matching live messages must appear and update the search count");
         view.addNotice("Bob joined the room.");
-        check(messages.getText().contains("joined") && results.getText().equals("Showing 2 of 4 messages"),
+        check(text(messages).contains("joined") && results.getText().equals("Showing 2 of 4 messages"),
                 "Server notices must remain visible during search without changing the message count");
         search.setText("NoSuchText");
-        check(!messages.getText().contains("Alice:") && !messages.getText().contains("Bob:")
+        check(!text(messages).contains("Hello café") && !text(messages).contains("An older message")
                         && results.getText().equals("No matching messages"),
                 "An empty search result needs clear feedback");
         named(view, "clearSearch", JButton.class).doClick();
-        check(search.getText().isEmpty() && messages.getText().contains("Other conversation"),
+        check(search.getText().isEmpty() && text(messages).contains("Other conversation"),
                 "Clear must restore all retained messages");
         search.setText("matching");
         view.beginSession("Alice");
-        check(search.getText().equals("matching") && messages.getText().isEmpty(),
+        check(search.getText().equals("matching") && text(messages).isEmpty(),
                 "Resuming the same identity must preserve its filter while clearing history for replay");
         view.addMessage(message("Bob", "A matching arrival"), true);
         check(results.getText().equals("Showing 1 of 1 messages"), "Replayed search results must not duplicate");
@@ -111,23 +120,24 @@ public final class ChatViewTest {
 
     private static void retention() {
         ChatView view = view();
-        JTextArea messages = named(view, "messages", JTextArea.class);
+        JTextPane messages = named(view, "messages", JTextPane.class);
         JTextField search = named(view, "searchMessages", JTextField.class);
         for (int i = 0; i <= ChatView.MAX_MESSAGES; i++) {
             view.addMessage(message("Bob", "entry-" + String.format("%04d", i)), true);
         }
-        check(messages.getLineCount() - 1 == ChatView.MAX_MESSAGES, "Exactly 500 short messages should be retained");
-        check(!messages.getText().contains("entry-0000") && messages.getText().contains("entry-0001")
-                        && messages.getText().contains("entry-0500"),
+        check(occurrences(text(messages), "entry-") == ChatView.MAX_MESSAGES,
+                "Exactly 500 short messages should be retained");
+        check(!text(messages).contains("entry-0000") && text(messages).contains("entry-0001")
+                        && text(messages).contains("entry-0500"),
                 "Only the oldest message should be removed when the limit is exceeded");
         search.setText("missing");
         for (int i = 0; i < 100; i++) {
             view.addMessage(message("Bob", "long-" + i + " " + "x".repeat(1_990)), true);
         }
         named(view, "clearSearch", JButton.class).doClick();
-        check(messages.getText().length() <= ChatView.MAX_CHARACTERS,
+        check(text(messages).length() <= ChatView.MAX_CHARACTERS,
                 "Hidden messages must still obey the character bound");
-        check(!messages.getText().contains("entry-0500") && messages.getText().contains("long-99 "),
+        check(!text(messages).contains("entry-0500") && text(messages).contains("long-99 "),
                 "The character cap must evict old full messages while retaining the newest");
     }
 
@@ -179,10 +189,10 @@ public final class ChatViewTest {
 
     private static void selection() {
         ChatView view = view();
-        JTextArea messages = named(view, "messages", JTextArea.class);
+        JTextPane messages = named(view, "messages", JTextPane.class);
         view.addMessage(message("Bob", "first"), true);
         view.addMessage(message("Carol", "Copy this message"), true);
-        int start = messages.getText().indexOf("Copy this message");
+        int start = text(messages).indexOf("Copy this message");
         messages.select(start, start + "Copy this message".length());
         view.addMessage(message("Bob", "An arrival"), false);
         check(messages.getSelectedText().equals("Copy this message"),
@@ -195,6 +205,73 @@ public final class ChatViewTest {
                 "Removing an earlier full message must adjust the selection without changing its text");
     }
 
+    private static void presentationAndRecovery() {
+        ChatView view = view();
+        JTextPane messages = named(view, "messages", JTextPane.class);
+        String literal = "<html><b>This is literal text</b></html> & everyone can copy it.";
+        view.addMessage(message("Alice", "The new layout is much easier to read."), true);
+        view.addMessage(message("Bob", "Agreed. A simple shared conversation is all we need."), true);
+        view.addMessage(message("Carol", literal), true);
+        view.setOnlineUsers(Arrays.asList("Alice", "Bob", "Carol", "A_very_long_username_12345678901"));
+        check(text(messages).contains(literal) && messages.getContentType().equals("text/plain"),
+                "Message markup must stay literal plain text rather than becoming rendered HTML");
+        check(!messages.isEditable() && messages.isFocusable(),
+                "The conversation must be read-only while remaining available for keyboard selection and copy");
+        StyledDocument document = messages.getStyledDocument();
+        AttributeSet author = document.getCharacterElement(text(messages).indexOf("Alice")).getAttributes();
+        AttributeSet timestamp = document.getCharacterElement(text(messages).indexOf("2026-10-24")).getAttributes();
+        AttributeSet body = document.getCharacterElement(text(messages).indexOf("The new layout")).getAttributes();
+        check(StyleConstants.isBold(author) && !StyleConstants.isBold(timestamp)
+                        && !StyleConstants.getForeground(timestamp).equals(StyleConstants.getForeground(body))
+                        && StyleConstants.getFontSize(timestamp) < StyleConstants.getFontSize(body),
+                "Authors and muted timestamps must be distinguishable from the readable message body");
+
+        try {
+            render(view, "chat-connected.png", 904, 450);
+            JList<?> users = named(view, "onlineUsers", JList.class);
+            JScrollPane usersScroll = (JScrollPane) users.getParent().getParent();
+            check(users.getWidth() <= usersScroll.getViewport().getExtentSize().width,
+                    "Long usernames must fit the sidebar instead of pushing user rows beyond its viewport");
+            String retained = text(messages);
+            view.setPresenceUnavailable();
+            view.setReconnecting(true);
+            check(text(messages).equals(retained), "Reconnecting must keep the conversation available");
+            JTextArea notice = named(view, "reconnectNotice", JTextArea.class);
+            check(visibleIn(view, notice) && notice.getText().toLowerCase(java.util.Locale.ROOT).contains("reconnect"),
+                    "An outage must provide a non-blocking reconnection notice");
+            check(named(view, "searchMessages", JTextField.class).isEnabled(),
+                    "Local history search must remain usable while reconnecting");
+            render(view, "chat-reconnecting.png", 720, 400);
+            JScrollPane offlineScroll = (JScrollPane) messages.getParent().getParent();
+            check(offlineScroll.getViewport().getExtentSize().height >= 100,
+                    "The reconnection notice must leave room to read the retained conversation");
+            view.setReconnecting(false);
+            check(!visibleIn(view, notice), "The reconnection notice must disappear when service is restored");
+
+            ChatView wrapping = view();
+            wrapping.addMessage(message("W".repeat(32), "x".repeat(2_000)), true);
+            render(wrapping, "chat-long-message.png", 720, 400);
+            JTextPane wrappedMessages = named(wrapping, "messages", JTextPane.class);
+            JScrollPane scroll = (JScrollPane) wrappedMessages.getParent().getParent();
+            Rectangle2D end = wrappedMessages.modelToView2D(wrappedMessages.getDocument().getLength() - 3);
+            Rectangle2D authorEnd = wrappedMessages.modelToView2D(31);
+            check(end != null && authorEnd != null
+                            && end.getMaxX() <= scroll.getViewport().getExtentSize().width
+                            && authorEnd.getMaxX() <= scroll.getViewport().getExtentSize().width,
+                    "Maximum-length usernames and unbroken messages must wrap inside the conversation viewport");
+            check(scroll.getVerticalScrollBar().isVisible()
+                            && scroll.getVerticalScrollBar().getMaximum() > scroll.getVerticalScrollBar().getVisibleAmount(),
+                    "A long wrapped message must remain reachable through vertical scrolling");
+            scroll.getVerticalScrollBar().setValue(scroll.getVerticalScrollBar().getMaximum());
+            check(end.getMaxY() <= scroll.getViewport().getViewPosition().y
+                            + scroll.getViewport().getExtentSize().height,
+                    "Scrolling to the bottom must reveal the end of a maximum-length message");
+            render(wrapping, "chat-long-message-end.png", 720, 400);
+        } catch (IOException | BadLocationException failure) {
+            throw new IllegalStateException(failure);
+        }
+    }
+
     private static void prepareScrollTest() {
         scrolling = view();
         for (int i = 0; i < 80; i++) {
@@ -202,15 +279,15 @@ public final class ChatViewTest {
         }
         scrolling.setOnlineUsers(Arrays.asList("Alice", "Bob"));
         try {
-            render(scrolling, "chat-minimum.png", 604, 360);
+            render(scrolling, "chat-minimum.png", 720, 400);
             named(scrolling, "searchMessages", JTextField.class).setText("not found");
-            render(scrolling, "chat-search-empty.png", 736, 400);
+            render(scrolling, "chat-search-empty.png", 904, 450);
             named(scrolling, "clearSearch", JButton.class).doClick();
-            render(scrolling, "chat-view.png", 736, 400);
+            render(scrolling, "chat-view.png", 904, 450);
         } catch (IOException e) {
             throw new IllegalStateException(e);
         }
-        JTextArea messages = named(scrolling, "messages", JTextArea.class);
+        JTextPane messages = named(scrolling, "messages", JTextPane.class);
         scrollingPane = (JScrollPane) messages.getParent().getParent();
     }
 
@@ -225,6 +302,37 @@ public final class ChatViewTest {
 
     private static ChatProtocol.ChatMessage message(String user, String text) {
         return new ChatProtocol.ChatMessage(TIME, user, text);
+    }
+
+    private static int occurrences(String text, String needle) {
+        int count = 0;
+        int index = 0;
+        while ((index = text.indexOf(needle, index)) >= 0) {
+            count++;
+            index += needle.length();
+        }
+        return count;
+    }
+
+    private static String text(JTextPane pane) {
+        try {
+            // JEditorPane#getText serializes platform line endings; document offsets do not.
+            return pane.getDocument().getText(0, pane.getDocument().getLength());
+        } catch (BadLocationException impossible) {
+            throw new IllegalStateException(impossible);
+        }
+    }
+
+    private static boolean visibleIn(Container root, Component component) {
+        for (Component current = component; current != null; current = current.getParent()) {
+            if (!current.isVisible()) {
+                return false;
+            }
+            if (current == root) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static <T extends Component> T named(Container parent, String name, Class<T> type) {
@@ -244,10 +352,16 @@ public final class ChatViewTest {
 
     private static void render(ChatView view, String filename, int width, int height) throws IOException {
         view.setSize(width, height);
-        layout(view);
+        // Assign width, calculate wrapped text height, then account for scrollbar width.
+        // A displayed Swing hierarchy performs these validation passes asynchronously.
+        for (int pass = 0; pass < 3; pass++) {
+            layout(view);
+        }
         BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         Graphics2D graphics = image.createGraphics();
         try {
+            graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
             view.printAll(graphics);
         } finally {
             graphics.dispose();

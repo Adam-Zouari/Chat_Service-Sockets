@@ -106,12 +106,15 @@ signup does not reserve its username. Only one session can use an account at a t
 Passwords are cleared after submission, when changing forms, and on disconnect;
 the desktop client does not save them.
 
-The chat toolbar has **Help** and **Log out** buttons. The online-user sidebar
+The compact header shows connection status, the server address, **Help**, and
+**Log out**. The light interface uses centered authentication forms, blue primary
+actions, and a fixed-width online-user sidebar with initials. The sidebar
 updates automatically as people connect and leave. After logout you can immediately
 log in again or create another account. Chat input is always message text; former
 slash commands such as `/quit` are sent as ordinary messages.
 
-Messages show the server-recorded date and time in your local time zone. Messages
+Messages show the sender and server-recorded date and time above the message body,
+in your local time zone. Text remains selectable and copyable. Messages
 saved before timestamps were introduced remain readable with their original time
 marked as unavailable. The **Search** field filters recent messages locally without
 sending a query to the server. Clear the search to show the whole retained buffer.
@@ -126,7 +129,8 @@ three seconds and restores your signed-in session when the server returns. You d
 not need to enter your password again while that client window remains open and
 its session is valid. The chat stays visible while reconnecting, with sending
 disabled and **Log out** still available. Recovery is automatic; there is no manual
-Refresh button. The user list is marked offline until a fresh snapshot arrives.
+Refresh button. A small notice explains the interruption, and the user list is
+marked offline until a fresh snapshot arrives.
 
 Session restoration uses a random token kept only in the running client's memory;
 your password is never cached or replayed. Tokens expire seven days after login.
@@ -138,7 +142,7 @@ Before your first login, you can fill out the forms while waiting for a connecti
 
 Online-user snapshots are not stored in chat history. Messages can contain
 Unicode and are limited to 2,000 Java characters (UTF-16 code units); blank messages
-and control characters are rejected. The client displays up to 500 lines or
+and control characters are rejected. The client displays up to 500 entries or
 160,000 characters. Closing its window disconnects it and stops reconnection.
 Stop the server with Ctrl+C.
 
@@ -180,8 +184,7 @@ and restart the server. Existing accounts and history are not automatically eras
 
 ## Check
 
-Compile with warnings enabled and run all six dependency-free regression harnesses
-(72 test groups):
+Compile with warnings enabled and run all six dependency-free regression harnesses:
 
 ```powershell
 .\scripts\build.ps1 -Test
@@ -208,6 +211,8 @@ restart/abrupt exit, write failures, automatic authenticated recovery, token exp
 and revocation, logout/login, password visibility, timestamps, live presence,
 local search, unread counts, and form interactions. Networking
 and form tests run headlessly; recovery tests forcibly terminate a real server JVM.
+The UI tests also render login, signup, chat, and reconnect previews as PNG files
+under `build/` for visual inspection.
 
 For a desktop smoke check, open two clients, sign up, exchange messages, and try
 Help and **Log out**. Log in again without reopening the window. Stop and restart the

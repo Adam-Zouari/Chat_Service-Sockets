@@ -41,10 +41,15 @@ history, and resumable sessions retain their existing file formats and location.
 | Network reconnection required entering a password after every server outage. | Issue a random expiring session token, retain it only in the open client, and persist its hash on the server so authenticated sessions resume automatically after crashes. Explicit logout revokes the token; fresh password login replaces it. |
 | Messages had no timestamps, online users required a command, and recent history was difficult to inspect. | Preserve server timestamps, push live online-user snapshots, add local message search, and show an unread title count for new incoming messages while inactive. |
 | Slash commands and manual Refresh duplicated normal interface actions. | Keep Help and Log out buttons, use an automatic online list and reconnection, and treat typed slash text as ordinary messages. |
+| Stretched authentication forms, raw log-style messages, and inconsistent Swing controls made the interface difficult to scan. | Center compact forms, share a light theme across controls, separate sender/time/body in selectable message rows, and add initials to the user sidebar. Keep connection status and actions together, with a subtle outage notice. |
 
 Small additions include configurable connection addresses, a connection status
 indicator, Send/Help/Log out buttons, message timestamps, live online users, search,
 and an unread count. Recovery happens automatically.
+
+The visual refresh uses standard Java 11 Swing components and a small shared
+theme, with no new dependencies. It leaves authentication, the TCP protocol,
+session recovery, and saved-data formats unchanged.
 
 ## Verification
 
@@ -66,6 +71,9 @@ hash-only persistence, expiry, malformed/cross-account tokens, durable logout,
 password-login token replacement, ownership-safe takeover, and legacy compatibility.
 Message and UI checks cover stable timestamps after restart, older saved history,
 online-list updates, literal slash messages, search/retention, and unread rules.
+UI checks also cover structured-message styling and wrapping, centered form
+layout, retained history during reconnects, and copyable text. The UI harnesses
+render PNG previews of the actual form and chat components under `build/`.
 
 A separate real-time check confirmed that a peer trickling an incomplete line is
 disconnected at the 60-second authentication deadline, while an authenticated idle
@@ -73,7 +81,7 @@ client remains connected and can send afterward.
 
 Compile with `--release 11 -Xlint:all` and run the harness using the commands in
 [README.md](../README.md). The PowerShell and Bash build scripts run all six
-regression harnesses (72 test groups). Desktop-client checks are described there
+regression harnesses. Desktop-client checks are described there
 as well.
 
 ## Remaining scope

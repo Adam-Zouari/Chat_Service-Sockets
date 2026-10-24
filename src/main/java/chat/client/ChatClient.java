@@ -26,7 +26,6 @@ import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.awt.Font;
 import java.awt.GraphicsEnvironment;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
@@ -60,8 +59,10 @@ public final class ChatClient implements ChatConnection.Listener {
     private final JTextField input = new JTextField();
     private final JButton sendButton = new JButton("Send");
     private final JButton logoutButton = new JButton("Log out");
-    private final JTextArea status = new JTextArea(2, 1);
-    private final JLabel identity = new JLabel();
+    private final JButton helpButton = new JButton("Help");
+    private final JTextArea status = new JTextArea(1, 1);
+    private final JLabel identity = new JLabel("A simple place to connect.");
+    private final JLabel connectionStatus = new JLabel("Connecting");
     private boolean ready;
     private boolean authenticated;
     private boolean reconnectingSession;
@@ -71,16 +72,12 @@ public final class ChatClient implements ChatConnection.Listener {
         address = host + ":" + port;
         connection = new ChatConnection(host, port, this);
         frame.setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
-        frame.setMinimumSize(new Dimension(620, 530));
-        frame.setSize(760, 580);
+        frame.setMinimumSize(new Dimension(740, 660));
+        frame.setSize(960, 720);
         frame.setLocationByPlatform(true);
-
-        JPanel header = new JPanel(new BorderLayout(12, 0));
-        header.setBorder(BorderFactory.createEmptyBorder(12, 12, 12, 12));
-        configureNotice(status);
-        status.setText("Connecting to " + address + "...");
-        header.add(status, BorderLayout.CENTER);
-        frame.add(header, BorderLayout.NORTH);
+        frame.getContentPane().setBackground(UiTheme.BACKGROUND);
+        content.setBackground(UiTheme.BACKGROUND);
+        frame.add(createHeader(), BorderLayout.NORTH);
 
         content.add(authentication, "authentication");
         content.add(createChatPanel(), "chat");
@@ -107,6 +104,7 @@ public final class ChatClient implements ChatConnection.Listener {
             }
         });
         frame.setVisible(true);
+        authentication.username.requestFocusInWindow();
         connection.start();
     }
 
@@ -132,34 +130,88 @@ public final class ChatClient implements ChatConnection.Listener {
             return;
         }
         final int serverPort = port;
-        SwingUtilities.invokeLater(() -> new ChatClient(host, serverPort));
+        SwingUtilities.invokeLater(() -> {
+            UiTheme.install();
+            new ChatClient(host, serverPort);
+        });
+    }
+
+    private JPanel createHeader() {
+        helpButton.addActionListener(event -> showHelp());
+        logoutButton.addActionListener(event -> logout());
+        UiTheme.styleSecondary(helpButton);
+        UiTheme.styleSecondary(logoutButton);
+        JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
+        actions.setOpaque(false);
+        actions.add(helpButton);
+        actions.add(logoutButton);
+
+        JLabel brand = new JLabel("Socket Chat");
+        brand.setFont(UiTheme.HEADING);
+        brand.setForeground(UiTheme.TEXT);
+        identity.setFont(UiTheme.SMALL);
+        identity.setForeground(UiTheme.MUTED);
+        JPanel branding = new JPanel(new BorderLayout(0, 4));
+        branding.setOpaque(false);
+        branding.add(brand, BorderLayout.NORTH);
+        branding.add(identity, BorderLayout.SOUTH);
+
+        connectionStatus.setFont(UiTheme.LABEL);
+        setConnectionState("Connecting", UiTheme.WARNING);
+        JLabel serverAddress = new JLabel(address);
+        serverAddress.setFont(UiTheme.SMALL);
+        serverAddress.setForeground(UiTheme.MUTED);
+        JPanel connectionInfo = new JPanel(new BorderLayout(0, 4));
+        connectionInfo.setOpaque(false);
+        connectionInfo.add(connectionStatus, BorderLayout.NORTH);
+        connectionInfo.add(serverAddress, BorderLayout.SOUTH);
+        JPanel right = new JPanel(new BorderLayout(16, 0));
+        right.setOpaque(false);
+        right.add(connectionInfo, BorderLayout.CENTER);
+        right.add(actions, BorderLayout.EAST);
+
+        JPanel bar = new JPanel(new BorderLayout(16, 0));
+        bar.setBackground(UiTheme.SURFACE);
+        bar.setBorder(BorderFactory.createEmptyBorder(16, 20, 16, 20));
+        bar.add(branding, BorderLayout.CENTER);
+        bar.add(right, BorderLayout.EAST);
+        UiTheme.styleNotice(status);
+        status.setFont(UiTheme.SMALL);
+        status.setBorder(BorderFactory.createEmptyBorder(0, 20, 10, 20));
+        status.setPreferredSize(new Dimension(1, status.getFontMetrics(status.getFont()).getHeight() * 2 + 10));
+        status.setVisible(false);
+        JPanel header = new JPanel(new BorderLayout());
+        header.setBackground(UiTheme.SURFACE);
+        header.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, UiTheme.BORDER));
+        header.add(bar, BorderLayout.CENTER);
+        header.add(status, BorderLayout.SOUTH);
+        return header;
     }
 
     private JPanel createChatPanel() {
-        JButton helpButton = new JButton("Help");
-        helpButton.addActionListener(event -> showHelp());
-        logoutButton.addActionListener(event -> logout());
-        JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
-        actions.add(helpButton);
-        actions.add(logoutButton);
-        JPanel toolbar = new JPanel(new BorderLayout(8, 0));
-        toolbar.setBorder(BorderFactory.createEmptyBorder(0, 12, 8, 12));
-        toolbar.add(identity, BorderLayout.CENTER);
-        toolbar.add(actions, BorderLayout.EAST);
 
         input.setToolTipText("Write a message and press Enter or Send.");
+        input.getAccessibleContext().setAccessibleName("Message");
+        UiTheme.styleInput(input);
+        input.putClientProperty("JTextField.placeholderText", "Type a message...");
+        input.setPreferredSize(new Dimension(0, 40));
+        UiTheme.stylePrimary(sendButton);
+        sendButton.setPreferredSize(new Dimension(84, 40));
         installLimit(input, ChatProtocol.MAX_MESSAGE_LENGTH,
-                () -> status.setText("Messages are limited to "
+                () -> setNotice("Messages are limited to "
                         + ChatProtocol.MAX_MESSAGE_LENGTH + " characters."));
         input.addActionListener(event -> sendInput());
         sendButton.addActionListener(event -> sendInput());
         JPanel composer = new JPanel(new BorderLayout(8, 0));
-        composer.setBorder(BorderFactory.createEmptyBorder(10, 12, 12, 12));
+        composer.setBackground(UiTheme.SURFACE);
+        composer.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(1, 0, 0, 0, UiTheme.BORDER),
+                BorderFactory.createEmptyBorder(12, 16, 16, 16)));
         composer.add(input, BorderLayout.CENTER);
         composer.add(sendButton, BorderLayout.EAST);
 
         JPanel chat = new JPanel(new BorderLayout());
-        chat.add(toolbar, BorderLayout.NORTH);
+        chat.setBackground(UiTheme.BACKGROUND);
         chat.add(chatView, BorderLayout.CENTER);
         chat.add(composer, BorderLayout.SOUTH);
         return chat;
@@ -185,7 +237,7 @@ public final class ChatClient implements ChatConnection.Listener {
             authentication.clearSecrets();
             authentication.setError("");
             authentication.setAvailability(true, true);
-            status.setText(authentication.isSignup() ? "Creating account..." : "Logging in...");
+            setNotice(authentication.isSignup() ? "Creating your account..." : "Signing you in...");
         } finally {
             Arrays.fill(password, '\0');
             Arrays.fill(confirmation, '\0');
@@ -250,16 +302,16 @@ public final class ChatClient implements ChatConnection.Listener {
             return false;
         }
         if (text.isBlank()) {
-            status.setText("Enter a message.");
+            setNotice("Enter a message.");
             return false;
         }
         if (text.length() > ChatProtocol.MAX_MESSAGE_LENGTH || !ChatProtocol.isAllowedText(text)) {
-            status.setText("Use at most " + ChatProtocol.MAX_MESSAGE_LENGTH
+            setNotice("Use at most " + ChatProtocol.MAX_MESSAGE_LENGTH
                     + " characters, without control characters.");
             return false;
         }
         if (!connection.sendMessage(text)) {
-            status.setText("Sending is busy. Wait a moment and try again.");
+            setNotice("Sending is busy. Wait a moment and try again.");
             return false;
         }
         return true;
@@ -271,7 +323,8 @@ public final class ChatClient implements ChatConnection.Listener {
 
     private void logout() {
         showAuthentication();
-        status.setText("Logged out. Reconnecting for login...");
+        setConnectionState("Connecting", UiTheme.WARNING);
+        setNotice("You have logged out. Connecting for your next sign-in...");
         connection.logout();
     }
 
@@ -280,10 +333,14 @@ public final class ChatClient implements ChatConnection.Listener {
     }
 
     private void showAuthentication(boolean clearSecrets) {
+        boolean returningToForm = authenticated || reconnectingSession;
         ready = false;
         authenticated = false;
         reconnectingSession = false;
         chatView.endSession();
+        chatView.setReconnecting(false);
+        identity.setText("A simple place to connect.");
+        identity.setToolTipText(null);
         if (clearSecrets) {
             authentication.clearSecrets();
         }
@@ -293,8 +350,12 @@ public final class ChatClient implements ChatConnection.Listener {
         input.setEnabled(false);
         sendButton.setEnabled(false);
         logoutButton.setEnabled(false);
+        logoutButton.setVisible(false);
         cards.show(content, "authentication");
         frame.getRootPane().setDefaultButton(authentication.submit);
+        if (returningToForm) {
+            authentication.username.requestFocusInWindow();
+        }
     }
 
     private void showReconnectingChat() {
@@ -302,16 +363,24 @@ public final class ChatClient implements ChatConnection.Listener {
         authenticated = false;
         reconnectingSession = true;
         chatView.setPresenceUnavailable();
+        chatView.setReconnecting(true);
         input.setEnabled(false);
         sendButton.setEnabled(false);
         logoutButton.setEnabled(true);
+        logoutButton.setVisible(true);
+        setConnectionState("Reconnecting", UiTheme.WARNING);
         cards.show(content, "chat");
     }
 
     @Override
     public void onStatus(String description) {
         if (!closed) {
-            status.setText(description);
+            if (reconnectingSession) {
+                setConnectionState("Reconnecting", UiTheme.WARNING);
+                setNotice("");
+            } else {
+                setNotice(description);
+            }
         }
     }
 
@@ -323,7 +392,8 @@ public final class ChatClient implements ChatConnection.Listener {
             }
             ready = true;
             authentication.setAvailability(true, false);
-            status.setText("Connected to " + address + ". Log in or create an account.");
+            setConnectionState("Connected", UiTheme.SUCCESS);
+            setNotice("");
         }
     }
 
@@ -339,13 +409,17 @@ public final class ChatClient implements ChatConnection.Listener {
         authentication.setAvailability(false, false);
         chatView.beginSession(username);
         chatView.setWindowFocused(frame.isFocused());
-        identity.setText("Signed in as " + username);
+        identity.setText("General chat  \u00b7  " + username);
+        identity.setToolTipText("Signed in as " + username);
+        chatView.setReconnecting(false);
         input.setEnabled(true);
         sendButton.setEnabled(true);
         logoutButton.setEnabled(true);
+        logoutButton.setVisible(true);
         cards.show(content, "chat");
         frame.getRootPane().setDefaultButton(sendButton);
-        status.setText("Connected to " + address + ". Ready to chat.");
+        setConnectionState("Connected", UiTheme.SUCCESS);
+        setNotice("");
         input.requestFocusInWindow();
     }
 
@@ -355,7 +429,7 @@ public final class ChatClient implements ChatConnection.Listener {
             authentication.clearSecrets();
             authentication.setAvailability(ready, false);
             authentication.setError(explanation);
-            status.setText("Login or signup was not completed. Check the form and try again.");
+            setNotice("");
         }
     }
 
@@ -389,7 +463,8 @@ public final class ChatClient implements ChatConnection.Listener {
             } else {
                 showAuthentication(authenticated || reconnectingSession);
             }
-            status.setText(explanation);
+            setConnectionState("Reconnecting", UiTheme.WARNING);
+            setNotice(reconnectingSession ? "" : explanation);
         }
     }
 
@@ -414,13 +489,16 @@ public final class ChatClient implements ChatConnection.Listener {
         });
     }
 
-    private static void configureNotice(JTextArea notice) {
-        notice.setEditable(false);
-        notice.setFocusable(false);
-        notice.setOpaque(false);
-        notice.setLineWrap(true);
-        notice.setWrapStyleWord(true);
-        notice.setFont(new JLabel().getFont());
+    private void setNotice(String description) {
+        status.setText(description);
+        status.setToolTipText(description.isBlank() ? null : description);
+        status.setVisible(!description.isBlank());
+        status.getParent().revalidate();
+    }
+
+    private void setConnectionState(String description, Color color) {
+        connectionStatus.setText("\u25cf  " + description);
+        connectionStatus.setForeground(color);
     }
 
     /** An ordinary form that can also be exercised without creating a desktop window. */
@@ -428,12 +506,13 @@ public final class ChatClient implements ChatConnection.Listener {
         private static final long serialVersionUID = 1L;
         private final JToggleButton loginMode = new JToggleButton("Log in", true);
         private final JToggleButton signupMode = new JToggleButton("Sign up");
-        private final JLabel title = new JLabel("Log in to Socket Chat");
+        private final JLabel title = new JLabel("Welcome back");
+        private final JLabel subtitle = new JLabel("Sign in to join the conversation.");
         private final JTextField username = new JTextField(24);
         private final JPasswordField password = new JPasswordField(24);
         private final JPasswordField confirmation = new JPasswordField(24);
         private final JLabel confirmationLabel = new JLabel("Confirm password");
-        private final JLabel guidance = new JLabel("Enter your username and password.");
+        private final JLabel guidance = new JLabel("8-128 characters: uppercase, number and symbol.");
         private final JCheckBox showPassword = new JCheckBox("Show password");
         private final JTextArea error = new JTextArea(2, 1);
         private final JButton submit = new JButton("Log in");
@@ -442,7 +521,8 @@ public final class ChatClient implements ChatConnection.Listener {
 
         AuthenticationForm(Runnable onSubmit) {
             super(new GridBagLayout());
-            setBorder(BorderFactory.createEmptyBorder(12, 24, 24, 24));
+            setBackground(UiTheme.BACKGROUND);
+            setBorder(BorderFactory.createEmptyBorder(8, 16, 8, 16));
             username.setName("username");
             password.setName("password");
             confirmation.setName("confirmPassword");
@@ -453,42 +533,92 @@ public final class ChatClient implements ChatConnection.Listener {
             error.setName("authenticationError");
             password.setEchoChar(passwordEcho);
             confirmation.setEchoChar(confirmationEcho);
+            UiTheme.styleInput(username);
+            UiTheme.styleInput(password);
+            UiTheme.styleInput(confirmation);
+            for (JTextField field : new JTextField[] {username, password, confirmation}) {
+                field.setPreferredSize(new Dimension(1, 38));
+            }
+            username.getAccessibleContext().setAccessibleName("Username");
+            password.getAccessibleContext().setAccessibleName("Password");
+            confirmation.getAccessibleContext().setAccessibleName("Confirm password");
+            username.setToolTipText("1-32 letters, digits or underscores, starting with a letter.");
+            title.setFont(UiTheme.TITLE);
+            title.setForeground(UiTheme.TEXT);
+            subtitle.setFont(UiTheme.LABEL);
+            subtitle.setForeground(UiTheme.MUTED);
+            guidance.setFont(UiTheme.SMALL);
+            guidance.setForeground(UiTheme.MUTED);
+            showPassword.setOpaque(false);
+            showPassword.setFont(UiTheme.LABEL);
+            showPassword.setForeground(UiTheme.TEXT);
+            showPassword.setBorder(BorderFactory.createEmptyBorder());
+            UiTheme.stylePrimary(submit);
+            submit.setPreferredSize(new Dimension(1, 38));
 
             ButtonGroup modes = new ButtonGroup();
             modes.add(loginMode);
             modes.add(signupMode);
-            JPanel modeButtons = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+            UiTheme.styleToggle(loginMode);
+            UiTheme.styleToggle(signupMode);
+            loginMode.setFont(UiTheme.SMALL);
+            signupMode.setFont(UiTheme.SMALL);
+            loginMode.setBorder(BorderFactory.createEmptyBorder(5, 8, 5, 8));
+            signupMode.setBorder(BorderFactory.createEmptyBorder(5, 8, 5, 8));
+            loginMode.setPreferredSize(new Dimension(60, 28));
+            signupMode.setPreferredSize(new Dimension(64, 28));
+            JPanel modeButtons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+            modeButtons.setOpaque(false);
             modeButtons.add(loginMode);
             modeButtons.add(signupMode);
             loginMode.addActionListener(event -> changeMode());
             signupMode.addActionListener(event -> changeMode());
 
-            JPanel form = new JPanel(new GridBagLayout());
+            JPanel form = UiTheme.surfacePanel(new GridBagLayout());
+            form.setName("authenticationCard");
+            form.setBorder(BorderFactory.createCompoundBorder(form.getBorder(),
+                    BorderFactory.createEmptyBorder(16, 16, 16, 16)));
             GridBagConstraints cell = new GridBagConstraints();
             cell.gridx = 0;
             cell.weightx = 1;
             cell.fill = GridBagConstraints.HORIZONTAL;
             cell.anchor = GridBagConstraints.WEST;
-            cell.insets = new Insets(0, 0, 6, 0);
-            addRow(form, cell, modeButtons);
-            title.setFont(title.getFont().deriveFont(Font.BOLD, 21f));
-            addRow(form, cell, title);
-            addRow(form, cell, Box.createVerticalStrut(6));
-            addRow(form, cell, new JLabel("Username"));
+            cell.insets = new Insets(0, 0, 4, 0);
+            JPanel heading = new JPanel(new BorderLayout(8, 0));
+            heading.setOpaque(false);
+            heading.add(title, BorderLayout.CENTER);
+            heading.add(modeButtons, BorderLayout.EAST);
+            addRow(form, cell, heading);
+            addRow(form, cell, subtitle);
+            addRow(form, cell, Box.createVerticalStrut(8));
+            JLabel usernameLabel = new JLabel("Username");
+            usernameLabel.setLabelFor(username);
+            addRow(form, cell, usernameLabel);
             addRow(form, cell, username);
-            addRow(form, cell, new JLabel("Password"));
+            addRow(form, cell, Box.createVerticalStrut(4));
+            JLabel passwordLabel = new JLabel("Password");
+            passwordLabel.setLabelFor(password);
+            addRow(form, cell, passwordLabel);
             addRow(form, cell, password);
+            addRow(form, cell, guidance);
+            addRow(form, cell, Box.createVerticalStrut(4));
+            confirmationLabel.setLabelFor(confirmation);
             addRow(form, cell, confirmationLabel);
             addRow(form, cell, confirmation);
             addRow(form, cell, showPassword);
-            addRow(form, cell, guidance);
-            configureNotice(error);
-            error.setForeground(new Color(170, 35, 35));
+            UiTheme.styleNotice(error);
+            error.setFont(UiTheme.SMALL);
+            error.setForeground(UiTheme.ERROR);
+            error.setVisible(false);
             addRow(form, cell, error);
+            addRow(form, cell, Box.createVerticalStrut(4));
             addRow(form, cell, submit);
-            cell.gridy++;
-            cell.weighty = 1;
-            add(form, cell);
+            GridBagConstraints centered = new GridBagConstraints();
+            centered.anchor = GridBagConstraints.CENTER;
+            centered.fill = GridBagConstraints.HORIZONTAL;
+            form.setPreferredSize(new Dimension(420, form.getPreferredSize().height));
+            form.setMinimumSize(new Dimension(380, 0));
+            add(form, centered);
 
             installLimit(username, 32, () -> setError("Usernames are limited to 32 characters."));
             installLimit(password, ChatProtocol.MAX_PASSWORD_LENGTH,
@@ -523,13 +653,13 @@ public final class ChatClient implements ChatConnection.Listener {
             clearSecrets();
             setError("");
             boolean signup = isSignup();
-            title.setText(signup ? "Create a Socket Chat account" : "Log in to Socket Chat");
+            title.setText(signup ? "Create your account" : "Welcome back");
+            subtitle.setText(signup ? "Join the conversation in a moment." : "Sign in to join the conversation.");
             submit.setText(signup ? "Create account" : "Log in");
             confirmationLabel.setVisible(signup);
             confirmation.setVisible(signup);
-            guidance.setText(signup
-                    ? "8-128 characters, with an uppercase letter, a number and a symbol."
-                    : "Enter your username and password.");
+            guidance.setVisible(signup);
+            resizeCard();
             revalidate();
             repaint();
         }
@@ -574,8 +704,23 @@ public final class ChatClient implements ChatConnection.Listener {
         }
 
         void setError(String description) {
-            error.setText(description.isEmpty() ? " " : description);
+            error.setText(description);
+            error.setVisible(!description.isEmpty());
+            error.setPreferredSize(null);
+            error.setSize(384, Short.MAX_VALUE);
+            error.setPreferredSize(new Dimension(1, error.getPreferredSize().height));
             error.setToolTipText(description.isEmpty() ? null : description);
+            resizeCard();
+            revalidate();
+            repaint();
+        }
+
+        private void resizeCard() {
+            JPanel card = (JPanel) error.getParent();
+            if (card != null) {
+                card.setPreferredSize(null);
+                card.setPreferredSize(new Dimension(420, card.getPreferredSize().height));
+            }
         }
     }
 }

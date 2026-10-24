@@ -5,13 +5,17 @@ import chat.protocol.ChatProtocol;
 import javax.imageio.ImageIO;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
+import javax.swing.JPanel;
 import javax.swing.JPasswordField;
+import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.JToggleButton;
 import javax.swing.SwingUtilities;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Graphics2D;
+import java.awt.Rectangle;
+import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -27,6 +31,7 @@ public final class ChatClientFormTest {
         System.setProperty("java.awt.headless", "true");
         SwingUtilities.invokeAndWait(() -> {
             try {
+                UiTheme.install();
                 formsAndVisibility();
                 validation();
             } catch (IOException failure) {
@@ -61,6 +66,7 @@ public final class ChatClientFormTest {
         check(password.getEchoChar() != 0 && confirm.getEchoChar() != 0,
                 "Unchecking Show password must mask both fields");
         render(form, "auth-login.png");
+        checkFormFits(form);
 
         visibility.doClick();
         signup.doClick();
@@ -78,13 +84,18 @@ public final class ChatClientFormTest {
         render(form, "auth-signup.png");
         form.setError("That username is already in use. Choose another username, or switch to Log in "
                 + "if you already have an account with this name.");
-        render(form, "auth-signup-minimum.png", 604, 430);
+        render(form, "auth-signup-minimum.png", 604, 570);
+        checkFormFits(form);
+        JTextArea error = named(form, "authenticationError", JTextArea.class);
+        check(error.getLineWrap() && error.getWrapStyleWord(),
+                "Long authentication errors must wrap inside the bounded form");
         form.setError("");
         submit.doClick();
         check(submissions.get() == 1, "Clicking the form button must submit once");
         confirm.postActionEvent();
         check(submissions.get() == 2, "Enter in the confirmation field must submit once");
         form.setAvailability(true, true);
+        render(form, "auth-signup-busy.png");
         check(!submit.isEnabled() && !username.isEnabled() && !signup.isEnabled(),
                 "An in-flight login should prevent duplicate submissions and mode changes");
         confirm.postActionEvent();
@@ -99,11 +110,14 @@ public final class ChatClientFormTest {
         check(!visibility.isSelected() && password.getEchoChar() != 0 && confirm.getEchoChar() != 0,
                 "Clearing credentials must restore masked mode");
         check(!submit.isEnabled() && username.isEnabled(), "Disconnected forms should remain editable");
+        render(form, "auth-signup-offline.png");
         login.doClick();
         check(!form.isSignup() && !confirm.isVisible(), "Users must be able to return to login");
         form.setAvailability(true, false);
         password.postActionEvent();
         check(submissions.get() == 3, "Enter in the login password field must submit once");
+        check(submit.isFocusable() && username.isFocusable() && password.isFocusable(),
+                "Authentication controls must remain reachable by keyboard");
 
         username.setText("a".repeat(33));
         check(username.getText().length() <= 32, "Username input must be bounded");
@@ -153,7 +167,29 @@ public final class ChatClientFormTest {
     }
 
     private static void render(ChatClient.AuthenticationForm form, String filename) throws IOException {
-        render(form, filename, 736, 480);
+        render(form, filename, 904, 600);
+    }
+
+    private static void checkFormFits(ChatClient.AuthenticationForm form) {
+        JPanel card = named(form, "authenticationCard", JPanel.class);
+        Rectangle bounds = SwingUtilities.convertRectangle(card.getParent(), card.getBounds(), form);
+        check(card.getWidth() >= 380 && card.getWidth() <= 420,
+                "Authentication must use a compact card instead of stretching across the window");
+        check(bounds.x >= 0 && bounds.y >= 0 && bounds.getMaxX() <= form.getWidth()
+                        && bounds.getMaxY() <= form.getHeight(),
+                "The authentication card must fit inside the available window");
+        check(Math.abs(bounds.getCenterX() - form.getWidth() / 2.0) <= 2,
+                "Authentication must stay centered as the window resizes");
+        for (String name : new String[]{"username", "password", "confirmPassword", "showPassword",
+                "authenticate", "authenticationError"}) {
+            Component component = find(card, name);
+            if (component != null && component.isVisible()) {
+                Rectangle inside = SwingUtilities.convertRectangle(component.getParent(), component.getBounds(), card);
+                check(inside.x >= 0 && inside.y >= 0 && inside.width > 0 && inside.height > 0
+                                && inside.getMaxX() <= card.getWidth() && inside.getMaxY() <= card.getHeight(),
+                        "Authentication control must remain inside the card: " + name);
+            }
+        }
     }
 
     private static void render(ChatClient.AuthenticationForm form, String filename, int width, int height)
@@ -163,6 +199,8 @@ public final class ChatClientFormTest {
         BufferedImage image = new BufferedImage(form.getWidth(), form.getHeight(), BufferedImage.TYPE_INT_RGB);
         Graphics2D graphics = image.createGraphics();
         try {
+            graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            graphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
             form.printAll(graphics);
         } finally {
             graphics.dispose();
