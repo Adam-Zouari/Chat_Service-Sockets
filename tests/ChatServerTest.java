@@ -37,7 +37,11 @@ public final class ChatServerTest {
 
     public static void main(String[] args) throws Exception {
         run("bounded line framing and strict UTF-8 decoding", ChatServerTest::protocolFraming);
-        run("UTF-8 chat, commands, and reconnect", ChatServerTest::chatAndCommands);
+        run("UTF-8 chat, literal slash messages, and reconnect", ChatServerTest::chatAndCommands);
+        run("timestamp framing and legacy stored history preserve message bodies", ChatServerTest::messageFraming);
+        run("timestamps survive restart and legacy history stays readable", ChatServerTest::timestampPersistence);
+        run("live presence is sorted, private before login, and updates without polling", ChatServerTest::livePresence);
+        run("structured chat cannot inject logout or presence controls", ChatServerTest::literalControlMessages);
         run("username validation on every retry", ChatServerTest::usernameValidation);
         run("password validation and abandoned registrations", ChatServerTest::passwordValidation);
         run("EOF during every authentication phase", ChatServerTest::authenticationEof);
@@ -93,7 +97,7 @@ public final class ChatServerTest {
             form.expect(ChatProtocol.FORM_OK_PREFIX + "FormsUser");
             form.send("a form user can chat");
             form.expect("FormsUser: a form user can chat");
-            form.send("/quit");
+            form.send(ChatProtocol.LOGOUT);
             form.awaitClosed();
             try (Peer login = formPeer(fixture)) {
                 submitForm(login, "login", "FormsUser", "WrongPassword9!");
@@ -101,7 +105,7 @@ public final class ChatServerTest {
                 submitForm(login, "login", "FormsUser", PASSWORD);
                 login.expect(ChatProtocol.FORM_OK_PREFIX + "FormsUser");
                 login.send("/help");
-                login.until(line -> line.startsWith("/quit - Log out."));
+                login.expect("FormsUser: /help");
             }
         }
     }
@@ -128,7 +132,7 @@ public final class ChatServerTest {
             try (Fixture restartedAgain = new Fixture(0, directory); Peer user = restartedAgain.login("PersistentUser", PASSWORD)) {
                 user.expect(message);
                 user.expect("PersistentUser: new message after restart");
-                user.send("/users");
+                user.send(ChatProtocol.USERS_REQUEST);
                 user.until(line -> line.startsWith(USERS_PREFIX));
             }
             byte[] stored = Files.readAllBytes(directory.resolve("accounts.bin"));
@@ -154,13 +158,13 @@ public final class ChatServerTest {
                 }
                 owner.send("unconfirmed message");
                 owner.until(line -> line.contains("storage is unavailable"));
-                owner.send("/users");
+                owner.send(ChatProtocol.USERS_REQUEST);
                 String names = owner.until(line -> line.startsWith(USERS_PREFIX)).last();
                 check(!names.contains("Unconfirmed"), "Unconfirmed signup became a session");
             }
             Files.delete(directory.resolve("accounts.bin.tmp"));
             try (Fixture restored = new Fixture(0, directory); Peer owner = restored.login("Owner", PASSWORD)) {
-                owner.send("/users");
+                owner.send(ChatProtocol.USERS_REQUEST);
                 List<String> replay = owner.until(line -> line.startsWith(USERS_PREFIX)).lines;
                 check(replay.contains("Owner: already committed"), "Committed message was lost");
                 check(!replay.contains("Owner: unconfirmed message"), "Failed message was broadcast/persisted");
@@ -225,6 +229,107 @@ public final class ChatServerTest {
         throw new AssertionError("Expected invalid input to throw IOException");
     }
 
+    private static void messageFraming() throws Exception {
+        String text = "  caf\u00e9: hello \uD83D\uDC4B : preserved spaces  ";
+        ChatProtocol.ChatMessage original = new ChatProtocol.ChatMessage(1_789_000_123_456L, "Alice", text);
+        for (ChatProtocol.ChatMessage decoded : Arrays.asList(
+                ChatProtocol.parseMessage(ChatProtocol.encodeMessage(original)),
+                ChatProtocol.parseStoredMessage(ChatProtocol.encodeStoredMessage(original)))) {
+            check(decoded.timestampMillis() == original.timestampMillis(), "Timestamp changed in a round trip");
+            check(decoded.username().equals("Alice") && decoded.text().equals(text),
+                    "Message sender, Unicode, punctuation, or whitespace changed");
+        }
+        ChatProtocol.ChatMessage legacy = ChatProtocol.parseStoredMessage("Alice: " + text);
+        check(legacy.timestampMillis() == 0 && legacy.text().equals(text), "Legacy history was not preserved");
+        for (String invalid : Arrays.asList("@message\t-1\tAlice\tbody", "@message\t+1\tAlice\tbody",
+                "@message\t9999999999999999999\tAlice\tbody", "@message\t1\tbad:name\tbody",
+                "@message\t1\tAlice\t ", "@message\t1\tAlice\tbad\tcontrol",
+                "@message\t1\tAlice\t" + "x".repeat(2001), "Alice: body")) {
+            expectIOException(() -> ChatProtocol.parseMessage(invalid));
+        }
+        for (String invalid : Arrays.asList("malformed", "bad:name: body", "Alice: ",
+                "@message -1 Alice body", "@message 1 Alice bad\tcontrol")) {
+            expectIOException(() -> ChatProtocol.parseStoredMessage(invalid));
+        }
+    }
+
+    private static void timestampPersistence() throws Exception {
+        Path directory = Files.createTempDirectory("chat-timestamps-");
+        String body = "Original timestamp: caf\u00e9 \uD83D\uDC4B  ";
+        String frame;
+        try {
+            try (ChatStore legacy = new ChatStore(directory)) {
+                legacy.appendMessage("Legacy: old body: still readable  ");
+            }
+            try (Fixture first = new Fixture(0, directory); Peer user = formPeer(first)) {
+                submitForm(user, "signup", "TimeUser", PASSWORD);
+                user.expect(ChatProtocol.FORM_OK_PREFIX + "TimeUser");
+                Seen replay = user.untilFrame(ChatProtocol.HISTORY_END::equals);
+                check(replay.lines.contains("@message\t0\tLegacy\told body: still readable  "),
+                        "Legacy history did not retain an explicitly unknown timestamp");
+                long before = System.currentTimeMillis();
+                user.send(ChatProtocol.SEND_PREFIX + body);
+                frame = user.untilFrame(line -> line.startsWith(ChatProtocol.MESSAGE_PREFIX)).last();
+                ChatProtocol.ChatMessage message = ChatProtocol.parseMessage(frame);
+                check(message.timestampMillis() >= before && message.timestampMillis() <= System.currentTimeMillis(),
+                        "The server did not assign the send timestamp");
+                check(message.text().equals(body), "Message body changed before storage");
+            }
+            try (Fixture restarted = new Fixture(0, directory); Peer user = formPeer(restarted)) {
+                submitForm(user, "login", "TimeUser", PASSWORD);
+                user.expect(ChatProtocol.FORM_OK_PREFIX + "TimeUser");
+                Seen replay = user.untilFrame(ChatProtocol.HISTORY_END::equals);
+                check(replay.lines.contains(frame), "The persisted timestamp changed during restart replay");
+                check(replay.lines.contains("@message\t0\tLegacy\told body: still readable  "),
+                        "Legacy history was lost after writing timestamped messages");
+            }
+        } finally {
+            deleteDirectory(directory);
+        }
+    }
+
+    private static void livePresence() throws Exception {
+        try (Fixture fixture = new Fixture(); Peer alice = fixture.signup("Alice"); Peer unauthenticated = fixture.peer()) {
+            alice.untilFrame((ChatProtocol.USERS_PREFIX + "Alice")::equals);
+            try (Peer bob = fixture.signup("Bob")) {
+                Seen snapshot = bob.untilFrame(line -> line.startsWith(ChatProtocol.USERS_PREFIX));
+                check(snapshot.lines.indexOf(ChatProtocol.HISTORY_END) >= 0,
+                        "Initial presence arrived before history replay finished");
+                check(snapshot.last().equals(ChatProtocol.USERS_PREFIX + "Alice\tBob"),
+                        "Initial presence was not sorted and complete");
+                alice.untilFrame((ChatProtocol.USERS_PREFIX + "Alice\tBob")::equals);
+                check(unauthenticated.inbox.poll(150, TimeUnit.MILLISECONDS) == null,
+                        "An unauthenticated socket received private room presence");
+                bob.send(ChatProtocol.LOGOUT);
+                bob.awaitClosed();
+                alice.untilFrame((ChatProtocol.USERS_PREFIX + "Alice")::equals);
+            }
+            Peer charlie = fixture.signup("Charlie");
+            alice.untilFrame((ChatProtocol.USERS_PREFIX + "Alice\tCharlie")::equals);
+            charlie.close();
+            alice.untilFrame((ChatProtocol.USERS_PREFIX + "Alice")::equals);
+        }
+    }
+
+    private static void literalControlMessages() throws Exception {
+        try (Fixture fixture = new Fixture(); Peer sender = fixture.signup("Sender"); Peer observer = fixture.signup("Observer")) {
+            for (String text : Arrays.asList("/help", "/users", "/quit", "@logout", "@who", "@history", "@users")) {
+                sender.send(ChatProtocol.SEND_PREFIX + text);
+                String frame = observer.untilFrame(line -> line.startsWith(ChatProtocol.MESSAGE_PREFIX)).last();
+                ChatProtocol.ChatMessage message = ChatProtocol.parseMessage(frame);
+                check(message.username().equals("Sender") && message.text().equals(text),
+                        "Ordinary message text was interpreted as a command");
+                sender.expect("Sender: " + text);
+            }
+            sender.send(ChatProtocol.SEND_PREFIX + "@users\tMallory");
+            sender.until(line -> line.contains("no control characters"));
+            sender.send(ChatProtocol.SEND_PREFIX + "still connected");
+            Seen received = observer.until(line -> line.equals("Sender: still connected"));
+            check(received.lines.stream().noneMatch(line -> line.contains("Mallory")),
+                    "A malformed chat body injected a presence update");
+        }
+    }
+
     private static void chatAndCommands() throws Exception {
         try (Fixture fixture = new Fixture();
              Peer alice = fixture.signup("Alice");
@@ -233,12 +338,16 @@ public final class ChatServerTest {
             alice.send(message);
             alice.expect("Alice: " + message);
             bob.expect("Alice: " + message);
-            bob.send("/users");
+            bob.send(ChatProtocol.USERS_REQUEST);
             String users = bob.until(line -> line.startsWith(USERS_PREFIX)).last();
             check(users.contains("Alice") && users.contains("Bob"), "Missing online users: " + users);
             bob.send("/help");
-            bob.until(line -> line.contains("/users") && line.contains("/quit"));
+            bob.expect("Bob: /help");
+            bob.send("/users");
+            bob.expect("Bob: /users");
             bob.send("/quit");
+            bob.expect("Bob: /quit");
+            bob.send(ChatProtocol.LOGOUT);
             bob.awaitClosed();
             awaitOffline(alice, "Bob");
             try (Peer reconnected = fixture.login("Bob", PASSWORD)) {
@@ -254,14 +363,12 @@ public final class ChatServerTest {
                 alice.expect("Bob: recovered after reset");
             }
             try (Peer newcomer = fixture.signup("Carol")) {
-                newcomer.send("/users");
+                newcomer.send(ChatProtocol.USERS_REQUEST);
                 List<String> history = newcomer.until(line -> line.startsWith(USERS_PREFIX)).lines;
                 check(history.contains("Alice: " + message), "Newcomer missed UTF-8 history");
                 check(history.contains("Bob: back again"), "Reconnect message missing from history");
-                for (String line : history) {
-                    check(!line.equals("Bob: /help") && !line.equals("Bob: /users")
-                            && !line.equals("Bob: /quit"), "Command leaked into history: " + line);
-                }
+                check(history.contains("Bob: /help") && history.contains("Bob: /users")
+                        && history.contains("Bob: /quit"), "Literal slash messages were lost from history");
             }
             try (Peer boundary = fixture.peer()) {
                 boundary.choose("signup");
@@ -353,7 +460,7 @@ public final class ChatServerTest {
                 candidate.expect(PASSWORD_PROMPT);
             }
             try (Peer recovered = fixture.signup("Abandoned")) {
-                recovered.send("/quit");
+                recovered.send(ChatProtocol.LOGOUT);
                 recovered.awaitClosed();
             }
             awaitOffline(watcher, "Abandoned");
@@ -384,7 +491,7 @@ public final class ChatServerTest {
             candidate.expect(PASSWORD_PROMPT);
             candidate.send(PASSWORD);
             candidate.connected("Switchable");
-            candidate.send("/quit");
+            candidate.send(ChatProtocol.LOGOUT);
             candidate.awaitClosed();
             try (Peer watcher = fixture.signup("Watcher")) {
                 awaitOffline(watcher, "Switchable");
@@ -420,7 +527,7 @@ public final class ChatServerTest {
             }
             owner.send("I am still connected");
             owner.expect("Owner: I am still connected");
-            owner.send("/users");
+            owner.send(ChatProtocol.USERS_REQUEST);
             check(owner.until(line -> line.startsWith(USERS_PREFIX)).last().contains("Owner"),
                     "Rejected login removed the real owner");
         }
@@ -429,7 +536,7 @@ public final class ChatServerTest {
     private static void passwordRetries() throws Exception {
         try (Fixture fixture = new Fixture(); Peer watcher = fixture.signup("Watcher")) {
             try (Peer account = fixture.signup("Account")) {
-                account.send("/quit");
+                account.send(ChatProtocol.LOGOUT);
                 account.awaitClosed();
             }
             awaitOffline(watcher, "Account");
@@ -469,7 +576,7 @@ public final class ChatServerTest {
             loser.expect(PASSWORD_PROMPT);
             loser.send(PASSWORD);
             loser.connected("OtherAccount");
-            winner.send("/quit");
+            winner.send(ChatProtocol.LOGOUT);
             winner.awaitClosed();
             awaitOffline(loser, "Contended");
             try (Peer login = fixture.login("Contended", firstWon ? "FirstPassword9!" : "SecondPassword9!")) {
@@ -482,7 +589,7 @@ public final class ChatServerTest {
     private static void loginRace() throws Exception {
         try (Fixture fixture = new Fixture(); Peer watcher = fixture.signup("Watcher")) {
             try (Peer registered = fixture.signup("Contended")) {
-                registered.send("/quit");
+                registered.send(ChatProtocol.LOGOUT);
                 registered.awaitClosed();
             }
             awaitOffline(watcher, "Contended");
@@ -522,8 +629,7 @@ public final class ChatServerTest {
             });
             newcomer.connected("Newcomer");
             sender.expect("Sender: " + sequence(129));
-            newcomer.send("/users");
-            List<String> received = newcomer.until(line -> line.startsWith(USERS_PREFIX)).lines;
+            List<String> received = newcomer.until(line -> line.equals("Sender: " + sequence(129))).lines;
             List<String> messages = new ArrayList<>();
             for (String line : received) {
                 if (line.startsWith("Sender: ")) {
@@ -544,10 +650,8 @@ public final class ChatServerTest {
                 sender.send(sequence(index));
             }
             sender.expect("Sender: " + sequence(519));
-            sender.send("/help");
-            sender.until(line -> line.contains("/users") && line.contains("/quit"));
             try (Peer newcomer = fixture.signup("Newcomer")) {
-                newcomer.send("/users");
+                newcomer.send(ChatProtocol.USERS_REQUEST);
                 List<String> received = newcomer.until(line -> line.startsWith(USERS_PREFIX)).lines;
                 List<String> history = new ArrayList<>();
                 for (String line : received) {
@@ -594,7 +698,7 @@ public final class ChatServerTest {
             observer.send("server survived malformed input");
             observer.expect("Observer: server survived malformed input");
             try (Peer newcomer = fixture.signup("Newcomer")) {
-                newcomer.send("/users");
+                newcomer.send(ChatProtocol.USERS_REQUEST);
                 List<String> history = newcomer.until(line -> line.startsWith(USERS_PREFIX)).lines;
                 for (String line : history) {
                     check(!line.equals("Sender: ") && !line.equals("Sender:    ")
@@ -683,7 +787,7 @@ public final class ChatServerTest {
                 healthy.send(body);
                 healthy.expect("Healthy: " + body);
                 if (index % 50 == 49) {
-                    healthy.send("/users");
+                    healthy.send(ChatProtocol.USERS_REQUEST);
                     String users = healthy.until(line -> line.startsWith(USERS_PREFIX)).last();
                     if (!users.contains("Stalled")) {
                         evicted = true;
@@ -723,7 +827,7 @@ public final class ChatServerTest {
     private static void awaitOffline(Peer watcher, String username) throws Exception {
         long deadline = System.nanoTime() + TIMEOUT_NANOS;
         do {
-            watcher.send("/users");
+            watcher.send(ChatProtocol.USERS_REQUEST);
             String users = watcher.until(line -> line.startsWith(USERS_PREFIX)).last();
             if (!Arrays.asList(users.substring(USERS_PREFIX.length()).trim().split("[, ]+")).contains(username)) {
                 return;
@@ -916,6 +1020,14 @@ public final class ChatServerTest {
         }
 
         Seen until(Predicate<String> match) throws Exception {
+            return until(match, false);
+        }
+
+        Seen untilFrame(Predicate<String> match) throws Exception {
+            return until(match, true);
+        }
+
+        private Seen until(Predicate<String> match, boolean raw) throws Exception {
             List<String> seen = new ArrayList<>();
             long deadline = System.nanoTime() + TIMEOUT_NANOS;
             while (true) {
@@ -928,6 +1040,18 @@ public final class ChatServerTest {
                     throw (IOException) value;
                 }
                 String line = (String) value;
+                if (!raw) {
+                    if (line.equals(ChatProtocol.HISTORY_START) || line.equals(ChatProtocol.HISTORY_END)) {
+                        continue;
+                    }
+                    if (line.startsWith(ChatProtocol.MESSAGE_PREFIX)) {
+                        ChatProtocol.ChatMessage entry = ChatProtocol.parseMessage(line);
+                        line = entry.username() + ": " + entry.text();
+                    } else if (line.equals("@users") || line.startsWith(ChatProtocol.USERS_PREFIX)) {
+                        line = "Online users: " + (line.equals("@users") ? ""
+                                : line.substring(ChatProtocol.USERS_PREFIX.length()).replace("\t", ", "));
+                    }
+                }
                 seen.add(line);
                 if (match.test(line)) {
                     return new Seen(seen);

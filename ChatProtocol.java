@@ -28,6 +28,80 @@ public final class ChatProtocol {
     public static final String FORM_ERROR_PREFIX = "@error\t";
     public static final String FORM_SESSION_PREFIX = "@session\t";
     public static final String FORM_RESUME_PREFIX = "@resume\t";
+    public static final String SEND_PREFIX = "@send\t";
+    public static final String LOGOUT = "@logout";
+    public static final String MESSAGE_PREFIX = "@message\t";
+    public static final String HISTORY_START = "@history";
+    public static final String HISTORY_END = "@live";
+    public static final String USERS_PREFIX = "@users\t";
+    public static final String USERS_REQUEST = "@who";
+
+    /** A server-timestamped chat entry; zero denotes an older entry with no saved timestamp. */
+    public static final class ChatMessage {
+        private final long timestampMillis;
+        private final String username;
+        private final String text;
+
+        public ChatMessage(long timestampMillis, String username, String text) {
+            if (timestampMillis < 0 || !validUsername(username) || !validMessage(text)) {
+                throw new IllegalArgumentException("Invalid chat message.");
+            }
+            this.timestampMillis = timestampMillis;
+            this.username = username;
+            this.text = text;
+        }
+
+        public long timestampMillis() { return timestampMillis; }
+        public String username() { return username; }
+        public String text() { return text; }
+    }
+
+    public static boolean validMessage(String text) {
+        return text != null && !text.isBlank() && text.length() <= MAX_MESSAGE_LENGTH && isAllowedText(text);
+    }
+
+    public static String encodeMessage(ChatMessage message) {
+        return MESSAGE_PREFIX + message.timestampMillis() + "\t" + message.username() + "\t" + message.text();
+    }
+
+    public static ChatMessage parseMessage(String frame) throws IOException {
+        if (frame == null || !frame.startsWith(MESSAGE_PREFIX)) {
+            throw new IOException("Invalid chat message frame.");
+        }
+        return parseMessageFields(frame.split("\t", 4));
+    }
+
+    /** Keeps the v1 journal framing and uses a control-free body accepted by older stores. */
+    public static String encodeStoredMessage(ChatMessage message) {
+        return "@message " + message.timestampMillis() + " " + message.username() + " " + message.text();
+    }
+
+    public static ChatMessage parseStoredMessage(String stored) throws IOException {
+        if (stored != null && stored.startsWith("@message ")) {
+            return parseMessageFields(stored.split(" ", 4));
+        }
+        // Before timestamps, durable history stored only "username: body".
+        int separator = stored == null ? -1 : stored.indexOf(": ");
+        if (separator > 0) {
+            try {
+                return new ChatMessage(0, stored.substring(0, separator), stored.substring(separator + 2));
+            } catch (IllegalArgumentException e) {
+                throw new IOException("Invalid stored chat message.", e);
+            }
+        }
+        throw new IOException("Invalid stored chat message.");
+    }
+
+    private static ChatMessage parseMessageFields(String[] fields) throws IOException {
+        if (fields.length != 4 || !fields[1].matches("[0-9]{1,19}")) {
+            throw new IOException("Invalid chat message frame.");
+        }
+        try {
+            return new ChatMessage(Long.parseLong(fields[1]), fields[2], fields[3]);
+        } catch (IllegalArgumentException e) {
+            throw new IOException("Invalid chat message frame.", e);
+        }
+    }
 
     public static boolean validSessionToken(String token) {
         return token != null && token.matches("[A-Za-z0-9_-]{43}");

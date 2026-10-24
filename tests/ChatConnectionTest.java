@@ -32,8 +32,8 @@ public final class ChatConnectionTest {
 
     public static void main(String[] args) throws Exception {
         System.setProperty("java.awt.headless", "true");
-        run("forms, retry after rejected credentials, UTF-8 and help", ChatConnectionTest::authentication);
-        run("quit returns to forms and permits signup and login", ChatConnectionTest::quitAndLogin);
+        run("forms, rejected credentials, UTF-8 and literal command text", ChatConnectionTest::authentication);
+        run("logout returns to forms and permits signup and login", ChatConnectionTest::quitAndLogin);
         run("refresh discards old session events and credentials", ChatConnectionTest::refresh);
         run("server restart reconnects automatically without replaying credentials", ChatConnectionTest::restart);
         run("session resumes after disconnect and Refresh without a password", ChatConnectionTest::resume);
@@ -43,8 +43,10 @@ public final class ChatConnectionTest {
         run("session frames stay secret and malformed frames are rejected", ChatConnectionTest::sessionFrames);
         run("initial failure retries and closing cancels retries", ChatConnectionTest::initialFailureAndClose);
         run("large history drains in order without flooding Swing", ChatConnectionTest::history);
+        run("structured history and live messages retain timestamps and update presence", ChatConnectionTest::structuredMessages);
+        run("malformed message, history and presence frames never reach Swing", ChatConnectionTest::malformedChatFrames);
         run("malformed server text never reaches Swing", ChatConnectionTest::malformedText);
-        run("real server forms, help, logout and reauthentication", ChatConnectionTest::realServer);
+        run("real server chat, presence, logout and reauthentication", ChatConnectionTest::realServer);
         run("a real process crash restores the authenticated session from persistent storage", ChatConnectionTest::crashRecovery);
         System.out.println("Passed " + passed + " connection tests.");
     }
@@ -75,15 +77,18 @@ public final class ChatConnectionTest {
             check(connection.authenticate(false, "Alice", password), "Auth error left connection unusable");
             Arrays.fill(password, '\0');
             checkAuth(peer.read(), false, "Alice", PASSWORD);
-            peer.send(ChatProtocol.FORM_OK_PREFIX + "Alice");
+            peer.authenticated("Alice");
             events.await("authenticated:Alice");
-            check(connection.sendMessage("/help"), "Help could not be sent");
-            check("/help".equals(peer.read()), "Help command was lost");
-            peer.send("Commands: /help, /users, /quit");
-            events.await("message:Commands: /help, /users, /quit");
+            for (String literal : Arrays.asList("/help", "/users", "/quit", "@logout", "@who", "@send text")) {
+                check(connection.sendMessage(literal), "Literal message could not be sent: " + literal);
+                check((ChatProtocol.SEND_PREFIX + literal).equals(peer.read()), "Chat text became a command");
+            }
+            check(!connection.sendMessage("hello\t@logout"), "A tab injected a control frame");
+            check(!connection.sendMessage("hello\n@logout"), "A newline injected a control frame");
+            peer.noInput();
             String unicode = "caf\u00e9 \ud83d\udc4b";
             check(connection.sendMessage(unicode), "UTF-8 message was rejected");
-            check(unicode.equals(peer.read()), "UTF-8 message was corrupted");
+            check((ChatProtocol.SEND_PREFIX + unicode).equals(peer.read()), "UTF-8 message was corrupted");
             connection.close();
             check(peer.read() == null, "Closing client did not close its socket");
             events.checkThread();
@@ -98,8 +103,8 @@ public final class ChatConnectionTest {
             check(!connection.canResumeSession(), "Unauthenticated client claims it can resume");
             Peer first = server.accept();
             login(connection, first, events, false, "Alice");
-            check(connection.sendMessage("/quit"), "Quit was not accepted");
-            check("/quit".equals(first.read()), "Quit did not ask the server to sign out");
+            connection.logout();
+            check(ChatProtocol.LOGOUT.equals(first.read()), "Logout did not ask the server to sign out");
             first.send("Goodbye.");
             check(first.read() == null, "Quit kept old session open");
             Peer second = server.accept();
@@ -108,10 +113,10 @@ public final class ChatConnectionTest {
             second.noInput();
             check(connection.authenticate(true, "Bob", PASSWORD.toCharArray()), "Signup unavailable after quit");
             checkAuth(second.read(), true, "Bob", PASSWORD);
-            second.send(ChatProtocol.FORM_OK_PREFIX + "Bob");
+            second.authenticated("Bob");
             events.await("authenticated:Bob");
             connection.logout();
-            check("/quit".equals(second.read()), "Logout did not ask the server to sign out");
+            check(ChatProtocol.LOGOUT.equals(second.read()), "Logout did not ask the server to sign out");
             second.send("Goodbye.");
             check(second.read() == null, "Logout kept old session open");
             Peer third = server.accept();
@@ -150,7 +155,7 @@ public final class ChatConnectionTest {
             check(!events.recorded.contains("message:stale old session message"), "Old message crossed a refresh");
             check(connection.authenticate(false, "Alice", PASSWORD.toCharArray()), "Refresh did not restore login");
             checkAuth(second.read(), false, "Alice", PASSWORD);
-            second.send(ChatProtocol.FORM_OK_PREFIX + "Alice");
+            second.authenticated("Alice");
             events.await("authenticated:Alice");
             events.checkThread();
         } finally {
@@ -177,7 +182,7 @@ public final class ChatConnectionTest {
                     second.noInput();
                     check(connection.authenticate(false, "Alice", PASSWORD.toCharArray()), "Restart left client stuck");
                     checkAuth(second.read(), false, "Alice", PASSWORD);
-                    second.send(ChatProtocol.FORM_OK_PREFIX + "Alice");
+                    second.authenticated("Alice");
                     events.await("authenticated:Alice");
                     events.checkThread();
                 }
@@ -231,7 +236,7 @@ public final class ChatConnectionTest {
             second.send("session restored");
             events.await("message:session restored");
             check(connection.sendMessage("back online"), "Resumed session cannot send");
-            check("back online".equals(second.read()), "Resumed message was lost");
+            check((ChatProtocol.SEND_PREFIX + "back online").equals(second.read()), "Resumed message was lost");
             connection.refresh();
             check(connection.canResumeSession(), "Refresh forgot a still valid session");
             check(second.read() == null, "Refresh kept the old socket open");
@@ -267,7 +272,7 @@ public final class ChatConnectionTest {
             checkAuth(second.read(), false, "Alice", PASSWORD);
             // An already expired credential is never sent back to the server.
             second.send(ChatProtocol.FORM_SESSION_PREFIX + TOKEN + "\t1");
-            second.send(ChatProtocol.FORM_OK_PREFIX + "Alice");
+            second.authenticated("Alice");
             events.await("authenticated:Alice");
             check(!connection.canResumeSession(), "Already expired session was still resumable");
             connection.refresh();
@@ -297,7 +302,7 @@ public final class ChatConnectionTest {
             connection.logout();
             check(!connection.canResumeSession(), "Logout retained the remembered session");
             events.await("disconnected:Signed out.");
-            check("/quit".equals(first.read()), "Logout did not request token revocation");
+            check(ChatProtocol.LOGOUT.equals(first.read()), "Logout did not request token revocation");
             first.noInput(); // Keep the socket alive until the revocation acknowledgement.
             first.send("Goodbye.");
             Peer second = server.accept();
@@ -306,7 +311,7 @@ public final class ChatConnectionTest {
             second.noInput();
             check(connection.authenticate(false, "Alice", PASSWORD.toCharArray()), "Logout did not restore login");
             checkAuth(second.read(), false, "Alice", PASSWORD);
-            second.send(ChatProtocol.FORM_OK_PREFIX + "Alice");
+            second.authenticated("Alice");
             events.await("authenticated:Alice");
         }
     }
@@ -319,7 +324,7 @@ public final class ChatConnectionTest {
             Peer first = server.accept();
             loginWithSession(connection, first, events, System.currentTimeMillis() + 60_000);
             connection.logout();
-            check("/quit".equals(first.read()), "Logout request was lost");
+            check(ChatProtocol.LOGOUT.equals(first.read()), "Logout request was lost");
             Peer second = server.accept(); // No goodbye: bounded timeout must reconnect.
             second.handshake();
             events.await("ready");
@@ -328,7 +333,7 @@ public final class ChatConnectionTest {
             check(connection.authenticate(false, "Alice", PASSWORD.toCharArray()), "Could not authenticate again");
             checkAuth(second.read(), false, "Alice", PASSWORD);
             second.send(ChatProtocol.FORM_SESSION_PREFIX + TOKEN + "\t" + (System.currentTimeMillis() + 60_000));
-            second.send(ChatProtocol.FORM_OK_PREFIX + "Alice");
+            second.authenticated("Alice");
             events.await("authenticated:Alice");
             second.close();
             events.awaitPrefix("disconnected:");
@@ -383,7 +388,7 @@ public final class ChatConnectionTest {
         check(connection.authenticate(false, "Alice", PASSWORD.toCharArray()), "Login was not queued");
         checkAuth(peer.read(), false, "Alice", PASSWORD);
         peer.send(ChatProtocol.FORM_SESSION_PREFIX + TOKEN + "\t" + expiry);
-        peer.send(ChatProtocol.FORM_OK_PREFIX + "Alice");
+        peer.authenticated("Alice");
         events.await("authenticated:Alice");
     }
 
@@ -391,7 +396,7 @@ public final class ChatConnectionTest {
         peer.handshake();
         checkResume(peer.read());
         peer.send(ChatProtocol.FORM_SESSION_PREFIX + TOKEN + "\t" + expiry);
-        peer.send(ChatProtocol.FORM_OK_PREFIX + "Alice");
+        peer.authenticated("Alice");
         events.await("authenticated:Alice");
     }
 
@@ -408,14 +413,107 @@ public final class ChatConnectionTest {
              ChatConnection connection = new ChatConnection("127.0.0.1", server.port(), events)) {
             connection.start();
             Peer peer = server.accept();
-            login(connection, peer, events, false, "Alice");
+            peer.handshake();
+            events.await("ready");
+            check(connection.authenticate(false, "Alice", PASSWORD.toCharArray()), "Cannot start history login");
+            checkAuth(peer.read(), false, "Alice", PASSWORD);
+            peer.send(ChatProtocol.FORM_OK_PREFIX + "Alice");
+            peer.send(ChatProtocol.HISTORY_START);
+            events.await("authenticated:Alice");
             for (int i = 0; i < 500; i++) {
-                peer.send("history " + i);
+                peer.send(ChatProtocol.encodeMessage(new ChatProtocol.ChatMessage(1_700_000_000_000L + i,
+                        "Alice", "history " + i)));
             }
+            peer.send(ChatProtocol.HISTORY_END);
+            peer.send(ChatProtocol.USERS_PREFIX + "Alice");
             for (int i = 0; i < 500; i++) {
-                events.await("message:history " + i);
+                events.await("chat:history:Alice: history " + i);
+                check(events.chatMessages.get(i).timestampMillis() == 1_700_000_000_000L + i,
+                        "History timestamp changed");
             }
+            events.await("users:Alice");
             events.checkThread();
+        }
+    }
+
+    private static void structuredMessages() throws Exception {
+        Events events = new Events();
+        try (StubServer server = new StubServer(0);
+             ChatConnection connection = new ChatConnection("127.0.0.1", server.port(), events)) {
+            connection.start();
+            Peer peer = server.accept();
+            peer.handshake();
+            events.await("ready");
+            check(connection.authenticate(false, "Alice", PASSWORD.toCharArray()), "Cannot start login");
+            checkAuth(peer.read(), false, "Alice", PASSWORD);
+            peer.send(ChatProtocol.FORM_OK_PREFIX + "Alice");
+            peer.send(ChatProtocol.HISTORY_START);
+            peer.send(ChatProtocol.encodeMessage(new ChatProtocol.ChatMessage(1_700_000_000_123L, "Bob", "earlier")));
+            peer.send(ChatProtocol.HISTORY_END);
+            peer.send(ChatProtocol.USERS_PREFIX + "Alice\tBob");
+            peer.send(ChatProtocol.encodeMessage(new ChatProtocol.ChatMessage(1_700_000_001_456L, "Bob", "new message")));
+            peer.send(ChatProtocol.USERS_PREFIX + "Alice");
+            peer.send("@users");
+            events.await("authenticated:Alice");
+            events.await("chat:history:Bob: earlier");
+            events.await("users:Alice,Bob");
+            events.await("chat:live:Bob: new message");
+            events.await("users:Alice");
+            events.await("users:");
+            check(events.chatMessages.get(0).timestampMillis() == 1_700_000_000_123L
+                    && events.chatMessages.get(1).timestampMillis() == 1_700_000_001_456L,
+                    "Server timestamps were replaced with receive times");
+            check(events.historicalFlags.equals(Arrays.asList(true, false)), "History and live events were mixed");
+            check(events.userSnapshots.get(0).equals(Arrays.asList("Alice", "Bob")), "Old presence snapshot changed");
+            try {
+                events.userSnapshots.get(0).add("Mallory");
+                throw new AssertionError("Presence snapshot was mutable");
+            } catch (UnsupportedOperationException expected) {
+                // A view cannot change membership seen by other callbacks.
+            }
+            check(events.recorded.stream().noneMatch(value -> value.startsWith("message:@")),
+                    "Protocol frames leaked as chat text");
+            events.checkThread();
+        }
+    }
+
+    private static void malformedChatFrames() throws Exception {
+        List<String> frames = new ArrayList<>(Arrays.asList(
+                "@message", "@message\tbad\tAlice\ttext", "@message\t-1\tAlice\ttext",
+                "@message\t1\tbad user\ttext", "@message\t1\tAlice\t",
+                "@message\t1\tAlice\ttext\textra", "@history", "@history extra", "@live",
+                "@users\tAlice\tAlice", "@users\tAlice\tbad user", "@users\t", "@users extra"));
+        List<String> excessive = new ArrayList<>();
+        for (int i = 0; i < 65; i++) {
+            excessive.add("User" + i);
+        }
+        frames.add(ChatProtocol.USERS_PREFIX + String.join("\t", excessive));
+        for (String frame : frames) {
+            Events events = new Events();
+            try (StubServer server = new StubServer(0);
+                 ChatConnection connection = new ChatConnection("127.0.0.1", server.port(), events)) {
+                connection.start();
+                Peer peer = server.accept();
+                login(connection, peer, events, false, "Alice");
+                peer.send(frame);
+                events.awaitPrefix("disconnected:");
+                check(events.chatMessages.isEmpty() && events.userSnapshots.isEmpty(),
+                        "Malformed frame reached the UI: " + frame);
+            }
+        }
+        for (String frame : Arrays.asList("@message\t1\tAlice\tsecret", "@users\tAlice", "@history", "@live")) {
+            Events events = new Events();
+            try (StubServer server = new StubServer(0);
+                 ChatConnection connection = new ChatConnection("127.0.0.1", server.port(), events)) {
+                connection.start();
+                Peer peer = server.accept();
+                peer.handshake();
+                events.await("ready");
+                peer.send(frame);
+                events.awaitPrefix("disconnected:");
+                check(events.chatMessages.isEmpty() && events.userSnapshots.isEmpty(),
+                        "Preauthentication frame exposed room data");
+            }
         }
     }
 
@@ -473,16 +571,24 @@ public final class ChatConnectionTest {
                 events.await("ready");
                 check(connection.authenticate(true, "ConnectionTester", PASSWORD.toCharArray()), "Signup unavailable");
                 events.await("authenticated:ConnectionTester");
-                check(connection.sendMessage("/help"), "Help unavailable");
-                events.awaitPrefix("message:Commands:");
-                events.awaitPrefix("message:/help - ");
-                events.awaitPrefix("message:/quit - ");
+                events.await("users:ConnectionTester");
+                check(connection.sendMessage("/help"), "Literal help text unavailable");
+                events.await("chat:live:ConnectionTester: /help");
                 check(connection.sendMessage("real server test"), "Message unavailable");
-                events.awaitPrefix("message:ConnectionTester:");
-                check(connection.sendMessage("/quit"), "Quit unavailable");
+                events.await("chat:live:ConnectionTester: real server test");
+                check(connection.sendMessage("/quit"), "Literal quit text unavailable");
+                events.await("chat:live:ConnectionTester: /quit");
+                check(connection.sendMessage("@logout"), "Literal control text unavailable");
+                events.await("chat:live:ConnectionTester: @logout");
+                connection.logout();
                 events.await("ready");
                 check(connection.authenticate(false, "ConnectionTester", PASSWORD.toCharArray()), "Login unavailable after quit");
                 events.await("authenticated:ConnectionTester");
+                events.await("chat:history:ConnectionTester: /help");
+                events.await("chat:history:ConnectionTester: real server test");
+                events.await("chat:history:ConnectionTester: /quit");
+                events.await("chat:history:ConnectionTester: @logout");
+                events.await("users:ConnectionTester");
                 events.checkThread();
             }
         }
@@ -505,15 +611,20 @@ public final class ChatConnectionTest {
                 check(connection.authenticate(true, "CrashTester", PASSWORD.toCharArray()), "Crash-test signup unavailable");
                 events.await("authenticated:CrashTester");
                 check(connection.sendMessage("saved before crash"), "Initial message failed");
-                events.await("message:CrashTester: saved before crash");
+                events.await("users:CrashTester");
+                events.await("chat:live:CrashTester: saved before crash");
+                long originalTimestamp = events.chatMessages.get(0).timestampMillis();
                 server.destroyForcibly(); // No orderly ChatServer.close or shutdown-hook save.
                 check(server.waitFor(5, TimeUnit.SECONDS), "Crashed server process did not exit");
                 events.awaitPrefix("disconnected:");
                 server = startServerProcess(port, directory);
                 events.await("authenticated:CrashTester");
-                events.await("message:CrashTester: saved before crash");
+                events.await("chat:history:CrashTester: saved before crash");
+                events.await("users:CrashTester");
+                check(originalTimestamp > 0 && events.chatMessages.get(1).timestampMillis() == originalTimestamp,
+                        "Crash recovery changed the saved message timestamp");
                 check(connection.sendMessage("restored after crash"), "Automatically restored session cannot send");
-                events.await("message:CrashTester: restored after crash");
+                events.await("chat:live:CrashTester: restored after crash");
                 check(events.recorded.stream().filter(value -> value.equals("ready")).count() == 1,
                         "Restart asked the already authenticated user to log in again");
                 check(events.recorded.stream().noneMatch(value -> value.contains("@session") || value.contains("@resume")),
@@ -558,7 +669,7 @@ public final class ChatConnectionTest {
         events.await("ready");
         check(connection.authenticate(signup, username, PASSWORD.toCharArray()), "Auth was not accepted");
         checkAuth(peer.read(), signup, username, PASSWORD);
-        peer.send(ChatProtocol.FORM_OK_PREFIX + username);
+        peer.authenticated(username);
         events.await("authenticated:" + username);
     }
 
@@ -585,6 +696,9 @@ public final class ChatConnectionTest {
     private static final class Events implements ChatConnection.Listener {
         final BlockingQueue<String> pending = new LinkedBlockingQueue<>();
         final List<String> recorded = new CopyOnWriteArrayList<>();
+        final List<ChatProtocol.ChatMessage> chatMessages = new CopyOnWriteArrayList<>();
+        final List<Boolean> historicalFlags = new CopyOnWriteArrayList<>();
+        final List<List<String>> userSnapshots = new CopyOnWriteArrayList<>();
         final AtomicReference<String> threadError = new AtomicReference<>();
 
         private void add(String event) {
@@ -600,6 +714,15 @@ public final class ChatConnectionTest {
         public void onAuthenticated(String username) { add("authenticated:" + username); }
         public void onAuthenticationError(String error) { add("error:" + error); }
         public void onMessage(String line) { add("message:" + line); }
+        public void onChatMessage(ChatProtocol.ChatMessage message, boolean historical) {
+            chatMessages.add(message);
+            historicalFlags.add(historical);
+            add("chat:" + (historical ? "history:" : "live:") + message.username() + ": " + message.text());
+        }
+        public void onOnlineUsers(List<String> users) {
+            userSnapshots.add(users);
+            add("users:" + String.join(",", users));
+        }
         public void onDisconnected(String reason) { add("disconnected:" + reason); }
 
         void await(String expected) throws Exception {
@@ -618,7 +741,8 @@ public final class ChatConnectionTest {
                 if (prefix ? next.startsWith(expected) : next.equals(expected)) {
                     return;
                 }
-                check(!next.startsWith("message:"), "Unexpected or out-of-order message: " + next);
+                check(!next.startsWith("message:") && !next.startsWith("chat:"),
+                        "Unexpected or out-of-order message: " + next);
             }
         }
 
@@ -682,6 +806,12 @@ public final class ChatConnectionTest {
             send(ChatProtocol.CHOICE_PROMPT);
             check(ChatProtocol.FORM_SESSION_HELLO.equals(read()), "Client did not request session-aware forms protocol");
             send(ChatProtocol.FORM_READY);
+        }
+
+        void authenticated(String username) throws IOException {
+            send(ChatProtocol.FORM_OK_PREFIX + username);
+            send(ChatProtocol.HISTORY_START);
+            send(ChatProtocol.HISTORY_END);
         }
 
         String read() throws IOException { return ChatProtocol.readLine(input); }

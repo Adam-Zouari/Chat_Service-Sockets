@@ -22,33 +22,38 @@ web service, or build framework.
 | Password entry was visible. | Mask password prompts and clear the input after sending. |
 | An unlimited transcript and queued UI updates could exhaust the client. | Bound both queues and the visible transcript; batch UI updates and bound pasted input. |
 | Authentication required typing commands and credentials into the chat composer. | Add regular login/signup forms with labelled fields, signup confirmation, buttons, and explicit authentication success/error frames. |
-| `/quit` permanently disabled a client, and server restarts left it stuck. | Separate window lifetime from socket sessions, reconnect automatically, provide Refresh, and return to the forms after logout or connection loss. |
-| `/help` was easy to miss in the transcript. | Show a descriptive local help dialog from `/help` or the Help button; retain detailed server help for text clients. |
+| Logging out permanently disabled a client, and server restarts left it stuck. | Separate window lifetime from socket sessions, reconnect automatically, and keep the login/signup forms reusable after logout. |
+| Help was easy to miss in the transcript. | Show a descriptive local dialog using the Help button. |
 | Users could not reveal a password to check typing. | Add a Show password checkbox for both signup password fields, with visibility reset on form/session changes. |
 | Restarting the server erased every account and message. | Save hashed accounts and bounded history before acknowledging them; load on startup, lock the data directory, and reject corruption without resetting data. |
 | Network reconnection required entering a password after every server outage. | Issue a random expiring session token, retain it only in the open client, and persist its hash on the server so authenticated sessions resume automatically after crashes. Explicit logout revokes the token; fresh password login replaces it. |
+| Messages had no timestamps, online users required a command, and recent history was difficult to inspect. | Preserve server timestamps, push live online-user snapshots, add local message search, and show an unread title count for new incoming messages while inactive. |
+| Slash commands and manual Refresh duplicated normal interface actions. | Keep Help and Log out buttons, use an automatic online list and reconnection, and treat typed slash text as ordinary messages. |
 
-Small additions: `/users`, `/help`, `/quit`, configurable connection addresses, a
-connection status indicator, and a Send button.
+Small additions include configurable connection addresses, a connection status
+indicator, Send/Help/Log out buttons, message timestamps, live online users, search,
+and an unread count. Recovery happens automatically.
 
 ## Verification
 
 The regression harness uses real loopback sockets and a fresh server per test. It
-contains 19 groups covering authentication EOF and mode switching, validation boundaries, duplicate
+contains 23 groups covering authentication EOF and mode switching, validation boundaries, duplicate
 signup/login races, session ownership, reconnects after TCP resets, UTF-8, malformed
 input, history/live ordering, the 500-message history bound, connection capacity,
-stalled-reader isolation, form authentication, commands, persistent server restarts,
+stalled-reader isolation, form authentication, action frames, persistent server restarts,
 storage failures, and shutdown.
 Direct protocol checks cover framing, line limits, Unicode, and strict decoding.
 
 Separate storage tests cover reopen, abrupt child-JVM termination, interrupted
 records, checksums, bounded compaction, immutable snapshots, file locks, and failed
 writes. Desktop-controller tests cover reconnect after outages, logout/login,
-refresh, credential clearing, old-session event suppression, and ordered history.
+credential clearing, old-session event suppression, and ordered history.
 Headless Swing form checks cover modes, validation, password visibility, and buttons.
 Session tests cover real process crashes, authenticated automatic recovery,
 hash-only persistence, expiry, malformed/cross-account tokens, durable logout,
 password-login token replacement, ownership-safe takeover, and legacy compatibility.
+Message and UI checks cover stable timestamps after restart, older saved history,
+online-list updates, literal slash messages, search/retention, and unread rules.
 
 A separate real-time check confirmed that a peer trickling an incomplete line is
 disconnected at the 60-second authentication deadline, while an authenticated idle

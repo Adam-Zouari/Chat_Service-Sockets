@@ -5,7 +5,11 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ScheduledFuture;
@@ -20,6 +24,8 @@ public final class ChatConnection implements AutoCloseable {
         void onAuthenticated(String username);
         void onAuthenticationError(String error);
         void onMessage(String line);
+        default void onChatMessage(ChatProtocol.ChatMessage message, boolean historical) { }
+        default void onOnlineUsers(List<String> users) { }
         void onDisconnected(String reason);
     }
 
@@ -95,7 +101,7 @@ public final class ChatConnection implements AutoCloseable {
                 signingOut.authenticated = false;
                 signingOut.logoutPending = true;
                 signingOut.outgoing.clear();
-                signingOut.outgoing.offer("/quit");
+                signingOut.outgoing.offer(ChatProtocol.LOGOUT);
                 events.clear();
                 lock.notifyAll();
                 postLocked(() -> listener.onDisconnected("Signed out."));
@@ -171,16 +177,12 @@ public final class ChatConnection implements AutoCloseable {
             if (closed || session == null || !session.authenticated || text == null) {
                 return false;
             }
-            if (text.trim().equals("/quit")) {
-                logout();
-                return true;
-            }
             if (text.isBlank() || text.length() > ChatProtocol.MAX_MESSAGE_LENGTH
                     || !ChatProtocol.isAllowedText(text)) {
                 postLocked(() -> listener.onStatus("Messages need 1-2000 characters without control characters."));
                 return false;
             }
-            if (!session.outgoing.offer(text)) {
+            if (!session.outgoing.offer(ChatProtocol.SEND_PREFIX + text)) {
                 postLocked(() -> listener.onStatus("Messages are sending slowly. Please try again shortly."));
                 return false;
             }
@@ -293,15 +295,6 @@ public final class ChatConnection implements AutoCloseable {
             current.provisionalExpiry = expiry;
             return;
         }
-        String content = line;
-        if (line.startsWith(ChatProtocol.FORM_OK_PREFIX)) {
-            content = line.substring(ChatProtocol.FORM_OK_PREFIX.length());
-        } else if (line.startsWith(ChatProtocol.FORM_ERROR_PREFIX)) {
-            content = line.substring(ChatProtocol.FORM_ERROR_PREFIX.length());
-        }
-        if (!ChatProtocol.isAllowedText(content)) {
-            throw new IOException("The server sent invalid text.");
-        }
         // Waiting here applies bounded backpressure to history and live traffic, while
         // leaving the EDT free to drain events or replace/close this connection.
         while (events.size() >= MAX_EVENTS - 4 && isCurrentLocked(current)) {
@@ -314,6 +307,18 @@ public final class ChatConnection implements AutoCloseable {
         }
         if (!isCurrentLocked(current)) {
             return;
+        }
+        if (handleChatFrameLocked(current, line)) {
+            return;
+        }
+        String content = line;
+        if (line.startsWith(ChatProtocol.FORM_OK_PREFIX)) {
+            content = line.substring(ChatProtocol.FORM_OK_PREFIX.length());
+        } else if (line.startsWith(ChatProtocol.FORM_ERROR_PREFIX)) {
+            content = line.substring(ChatProtocol.FORM_ERROR_PREFIX.length());
+        }
+        if (!ChatProtocol.isAllowedText(content)) {
+            throw new IOException("The server sent invalid text.");
         }
         if (line.equals(ChatProtocol.FORM_READY) && !current.ready) {
             current.ready = true;
@@ -346,6 +351,7 @@ public final class ChatConnection implements AutoCloseable {
             current.authenticationPending = false;
             current.resumePending = false;
             current.authenticated = true;
+            current.historical = true;
             postLocked(() -> listener.onStatus("Connected as " + username + "."));
             postLocked(() -> listener.onAuthenticated(username));
         } else if (line.startsWith(ChatProtocol.FORM_ERROR_PREFIX)) {
@@ -366,6 +372,61 @@ public final class ChatConnection implements AutoCloseable {
             postLocked(() -> listener.onMessage(line));
         }
         // Legacy welcome and choice prompts precede the forms handshake and are ignored.
+    }
+
+    private boolean handleChatFrameLocked(Session current, String line) throws IOException {
+        if (line.startsWith("@message")) {
+            if (!current.authenticated || (current.historical && !current.historyStarted)) {
+                throw new IOException("Unexpected chat message.");
+            }
+            ChatProtocol.ChatMessage message = ChatProtocol.parseMessage(line);
+            boolean historical = current.historical;
+            if (historical && ++current.historyCount > 500) {
+                throw new IOException("The server sent too much history.");
+            }
+            postLocked(() -> listener.onChatMessage(message, historical));
+            return true;
+        }
+        if (line.startsWith(ChatProtocol.HISTORY_START)) {
+            if (!line.equals(ChatProtocol.HISTORY_START) || !current.authenticated
+                    || !current.historical || current.historyStarted) {
+                throw new IOException("Unexpected history start.");
+            }
+            current.historyStarted = true;
+            return true;
+        }
+        if (line.startsWith(ChatProtocol.HISTORY_END)) {
+            if (!line.equals(ChatProtocol.HISTORY_END) || !current.authenticated
+                    || !current.historical || !current.historyStarted) {
+                throw new IOException("Unexpected history end.");
+            }
+            current.historical = false;
+            return true;
+        }
+        if (line.startsWith("@users")) {
+            if (!current.authenticated || current.historical
+                    || (!line.equals("@users") && !line.startsWith(ChatProtocol.USERS_PREFIX))) {
+                throw new IOException("Unexpected online-user list.");
+            }
+            List<String> users = new ArrayList<>();
+            Set<String> unique = new HashSet<>();
+            if (!line.equals("@users")) {
+                String[] names = line.substring(ChatProtocol.USERS_PREFIX.length()).split("\t", -1);
+                if (names.length > 64) {
+                    throw new IOException("Too many online users.");
+                }
+                for (String username : names) {
+                    if (!ChatProtocol.validUsername(username) || !unique.add(username)) {
+                        throw new IOException("Invalid online-user list.");
+                    }
+                    users.add(username);
+                }
+            }
+            List<String> snapshot = List.copyOf(users);
+            postLocked(() -> listener.onOnlineUsers(snapshot));
+            return true;
+        }
+        return false;
     }
 
     private void disconnected(Session current, String reason) {
@@ -496,6 +557,9 @@ public final class ChatConnection implements AutoCloseable {
         boolean authenticationPending;
         boolean resumePending;
         boolean logoutPending;
+        boolean historical;
+        boolean historyStarted;
+        int historyCount;
         String authenticationUsername;
         String provisionalToken;
         long provisionalExpiry;

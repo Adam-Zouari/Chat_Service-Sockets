@@ -8,8 +8,6 @@ import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JPasswordField;
-import javax.swing.JScrollBar;
-import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
 import javax.swing.JToggleButton;
@@ -18,7 +16,6 @@ import javax.swing.WindowConstants;
 import javax.swing.text.AbstractDocument;
 import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
-import javax.swing.text.DefaultCaret;
 import javax.swing.text.DocumentFilter;
 import java.awt.BorderLayout;
 import java.awt.CardLayout;
@@ -33,17 +30,17 @@ import java.awt.Insets;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.util.Arrays;
+import java.util.List;
 
 /** Swing presentation only; socket work and reconnects belong to ChatConnection. */
 public final class ChatClient implements ChatConnection.Listener {
-    private static final int MAX_DISPLAY_LINES = 500;
-    private static final int MAX_DISPLAY_CHARACTERS = 160_000;
     private static final String HELP_TEXT = "Write a message and press Enter or Send to chat.\n\n"
-            + "/help  -  Show this help.\n"
-            + "/users  -  List everyone currently online.\n"
-            + "/quit  -  Log out and return to the login form.\n\n"
-            + "If the server stops, the client reconnects automatically.\n"
-            + "You can also use Refresh connection to try immediately.\n"
+            + "The sidebar updates automatically as people join and leave.\n"
+            + "Search filters recent messages by username or message text on this computer.\n"
+            + "Clear the search to see all recent messages again.\n"
+            + "The window title counts new messages while you are away.\n"
+            + "Use Log out to return to the login form.\n\n"
+            + "If the server stops, the client retries automatically every 3 seconds.\n"
             + "Your session is restored while this window stays open, for up to 7 days.\n"
             + "Logging out or closing the window requires a new login.\n"
             + "Your password is never saved.";
@@ -54,13 +51,11 @@ public final class ChatClient implements ChatConnection.Listener {
     private final CardLayout cards = new CardLayout();
     private final JPanel content = new JPanel(cards);
     private final AuthenticationForm authentication = new AuthenticationForm(this::authenticate);
-    private final JTextArea messageArea = new JTextArea();
-    private final JScrollPane scrollPane = new JScrollPane(messageArea);
+    private final ChatView chatView = new ChatView(count -> frame.setTitle(
+            count == 0 ? "Socket Chat" : "(" + count + ") Socket Chat"));
     private final JTextField input = new JTextField();
     private final JButton sendButton = new JButton("Send");
-    private final JButton usersButton = new JButton("Online users");
     private final JButton logoutButton = new JButton("Log out");
-    private final JButton refreshButton = new JButton("Refresh connection");
     private final JTextArea status = new JTextArea(2, 1);
     private final JLabel identity = new JLabel();
     private boolean ready;
@@ -81,8 +76,6 @@ public final class ChatClient implements ChatConnection.Listener {
         configureNotice(status);
         status.setText("Connecting to " + address + "...");
         header.add(status, BorderLayout.CENTER);
-        refreshButton.addActionListener(event -> refresh());
-        header.add(refreshButton, BorderLayout.EAST);
         frame.add(header, BorderLayout.NORTH);
 
         content.add(authentication, "authentication");
@@ -96,6 +89,17 @@ public final class ChatClient implements ChatConnection.Listener {
                 authentication.clearSecrets();
                 connection.close();
                 frame.dispose();
+            }
+        });
+        frame.addWindowFocusListener(new WindowAdapter() {
+            @Override
+            public void windowGainedFocus(WindowEvent event) {
+                chatView.setWindowFocused(true);
+            }
+
+            @Override
+            public void windowLostFocus(WindowEvent event) {
+                chatView.setWindowFocused(false);
             }
         });
         frame.setVisible(true);
@@ -128,26 +132,18 @@ public final class ChatClient implements ChatConnection.Listener {
     }
 
     private JPanel createChatPanel() {
-        messageArea.setEditable(false);
-        messageArea.setLineWrap(true);
-        messageArea.setWrapStyleWord(true);
-        ((DefaultCaret) messageArea.getCaret()).setUpdatePolicy(DefaultCaret.NEVER_UPDATE);
-        messageArea.setMargin(new Insets(8, 8, 8, 8));
-
         JButton helpButton = new JButton("Help");
         helpButton.addActionListener(event -> showHelp());
-        usersButton.addActionListener(event -> sendMessage("/users"));
         logoutButton.addActionListener(event -> logout());
         JPanel actions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
         actions.add(helpButton);
-        actions.add(usersButton);
         actions.add(logoutButton);
         JPanel toolbar = new JPanel(new BorderLayout(8, 0));
         toolbar.setBorder(BorderFactory.createEmptyBorder(0, 12, 8, 12));
         toolbar.add(identity, BorderLayout.CENTER);
         toolbar.add(actions, BorderLayout.EAST);
 
-        input.setToolTipText("Write a message, or use /help, /users, /quit.");
+        input.setToolTipText("Write a message and press Enter or Send.");
         installLimit(input, ChatProtocol.MAX_MESSAGE_LENGTH,
                 () -> status.setText("Messages are limited to "
                         + ChatProtocol.MAX_MESSAGE_LENGTH + " characters."));
@@ -160,7 +156,7 @@ public final class ChatClient implements ChatConnection.Listener {
 
         JPanel chat = new JPanel(new BorderLayout());
         chat.add(toolbar, BorderLayout.NORTH);
-        chat.add(scrollPane, BorderLayout.CENTER);
+        chat.add(chatView, BorderLayout.CENTER);
         chat.add(composer, BorderLayout.SOUTH);
         return chat;
     }
@@ -249,14 +245,6 @@ public final class ChatClient implements ChatConnection.Listener {
         if (closed || !authenticated) {
             return false;
         }
-        if (text.equals("/help")) {
-            showHelp();
-            return true;
-        }
-        if (text.equals("/quit")) {
-            logout();
-            return true;
-        }
         if (text.isBlank()) {
             status.setText("Enter a message.");
             return false;
@@ -283,16 +271,6 @@ public final class ChatClient implements ChatConnection.Listener {
         connection.logout();
     }
 
-    private void refresh() {
-        if (connection.canResumeSession()) {
-            showReconnectingChat();
-        } else {
-            showAuthentication(authenticated || reconnectingSession);
-        }
-        status.setText("Reconnecting to " + address + "...");
-        connection.refresh();
-    }
-
     private void showAuthentication() {
         showAuthentication(true);
     }
@@ -301,6 +279,7 @@ public final class ChatClient implements ChatConnection.Listener {
         ready = false;
         authenticated = false;
         reconnectingSession = false;
+        chatView.endSession();
         if (clearSecrets) {
             authentication.clearSecrets();
         }
@@ -309,7 +288,6 @@ public final class ChatClient implements ChatConnection.Listener {
         input.setText("");
         input.setEnabled(false);
         sendButton.setEnabled(false);
-        usersButton.setEnabled(false);
         logoutButton.setEnabled(false);
         cards.show(content, "authentication");
         frame.getRootPane().setDefaultButton(authentication.submit);
@@ -319,9 +297,9 @@ public final class ChatClient implements ChatConnection.Listener {
         ready = false;
         authenticated = false;
         reconnectingSession = true;
+        chatView.setPresenceUnavailable();
         input.setEnabled(false);
         sendButton.setEnabled(false);
-        usersButton.setEnabled(false);
         logoutButton.setEnabled(true);
         cards.show(content, "chat");
     }
@@ -355,15 +333,15 @@ public final class ChatClient implements ChatConnection.Listener {
         ready = false;
         authentication.clearSecrets();
         authentication.setAvailability(false, false);
-        messageArea.setText("");
+        chatView.beginSession(username);
+        chatView.setWindowFocused(frame.isFocused());
         identity.setText("Signed in as " + username);
         input.setEnabled(true);
         sendButton.setEnabled(true);
-        usersButton.setEnabled(true);
         logoutButton.setEnabled(true);
         cards.show(content, "chat");
         frame.getRootPane().setDefaultButton(sendButton);
-        status.setText("Connected to " + address + ". Use Help for chat commands.");
+        status.setText("Connected to " + address + ". Ready to chat.");
         input.requestFocusInWindow();
     }
 
@@ -380,7 +358,22 @@ public final class ChatClient implements ChatConnection.Listener {
     @Override
     public void onMessage(String line) {
         if (!closed && authenticated) {
-            appendMessage(line);
+            chatView.addNotice(line);
+        }
+    }
+
+    @Override
+    public void onChatMessage(ChatProtocol.ChatMessage message, boolean historical) {
+        if (!closed && authenticated) {
+            chatView.setWindowFocused(frame.isFocused());
+            chatView.addMessage(message, historical);
+        }
+    }
+
+    @Override
+    public void onOnlineUsers(List<String> users) {
+        if (!closed && authenticated) {
+            chatView.setOnlineUsers(users);
         }
     }
 
@@ -393,29 +386,6 @@ public final class ChatClient implements ChatConnection.Listener {
                 showAuthentication(authenticated || reconnectingSession);
             }
             status.setText(explanation);
-        }
-    }
-
-    private void appendMessage(String line) {
-        JScrollBar scrollbar = scrollPane.getVerticalScrollBar();
-        boolean follow = scrollbar.getValue() + scrollbar.getVisibleAmount()
-                >= scrollbar.getMaximum() - 10;
-        messageArea.append(line + "\n");
-        try {
-            int excessLines = messageArea.getLineCount() - 1 - MAX_DISPLAY_LINES;
-            if (excessLines > 0) {
-                messageArea.getDocument().remove(0, messageArea.getLineStartOffset(excessLines));
-            }
-            int excessCharacters = messageArea.getDocument().getLength() - MAX_DISPLAY_CHARACTERS;
-            if (excessCharacters > 0) {
-                int removeThroughLine = messageArea.getLineOfOffset(excessCharacters) + 1;
-                messageArea.getDocument().remove(0, messageArea.getLineStartOffset(removeThroughLine));
-            }
-        } catch (BadLocationException impossible) {
-            throw new IllegalStateException("Could not trim chat history", impossible);
-        }
-        if (follow) {
-            messageArea.setCaretPosition(messageArea.getDocument().getLength());
         }
     }
 

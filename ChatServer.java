@@ -46,7 +46,7 @@ public final class ChatServer implements AutoCloseable {
     private final Map<String, PasswordHash> accounts = new HashMap<>();
     private final Map<String, ClientHandler> clients = new HashMap<>();
     private final Map<String, ResumeSession> resumeSessions = new HashMap<>();
-    private final ArrayDeque<String> history = new ArrayDeque<>();
+    private final ArrayDeque<ChatProtocol.ChatMessage> history = new ArrayDeque<>();
     private final Set<ClientHandler> connections = ConcurrentHashMap.newKeySet();
     private final Semaphore connectionSlots = new Semaphore(MAX_CLIENTS);
     private final ScheduledThreadPoolExecutor timeouts = createTimeoutExecutor();
@@ -87,7 +87,9 @@ public final class ChatServer implements AutoCloseable {
                     new PasswordHash(credential.salt(), credential.hash())));
             snapshot.sessions().forEach((name, session) -> resumeSessions.put(name,
                     new ResumeSession(session.tokenHash(), session.expiresAtMillis())));
-            history.addAll(snapshot.history());
+            for (String stored : snapshot.history()) {
+                history.addLast(ChatProtocol.parseStoredMessage(stored));
+            }
         } catch (IOException | RuntimeException e) {
             try {
                 store.close();
@@ -287,6 +289,13 @@ public final class ChatServer implements AutoCloseable {
         }
     }
 
+    /** Full snapshots keep presence correct after joins, disconnects, and session takeovers. */
+    private String onlineUsersLocked() {
+        List<String> names = new ArrayList<>(clients.keySet());
+        names.sort(String::compareTo);
+        return names.isEmpty() ? "@users" : ChatProtocol.USERS_PREFIX + String.join("\t", names);
+    }
+
     private final class ClientHandler implements Runnable {
         private final Socket socket;
         // Enough room for an entire replay plus authentication and presence messages.
@@ -331,12 +340,7 @@ public final class ChatServer implements AutoCloseable {
                 authenticationTimeout.cancel(false);
                 String message;
                 while (!disconnected.get() && (message = ChatProtocol.readLine(reader)) != null) {
-                    if (!ChatProtocol.isAllowedText(message) || message.length() > ChatProtocol.MAX_MESSAGE_LENGTH) {
-                        send("Messages must contain at most " + ChatProtocol.MAX_MESSAGE_LENGTH
-                                + " characters and no control characters.");
-                    } else if (message.isBlank()) {
-                        send("Please enter a message.");
-                    } else if (message.equals("/quit")) {
+                    if (message.equals(ChatProtocol.LOGOUT)) {
                         if (revokeSession()) {
                             send("Goodbye.");
                         } else {
@@ -344,27 +348,35 @@ public final class ChatServer implements AutoCloseable {
                         }
                         drainOutput = true;
                         break;
-                    } else if (message.equals("/help")) {
-                        send("Commands: /help, /users, /quit");
-                        send("/help - Show this help. /users - List online users.");
-                        send("/quit - Log out. The desktop client returns to the login form.");
-                    } else if (message.equals("/users")) {
-                        List<String> names;
+                    }
+                    if (message.equals(ChatProtocol.USERS_REQUEST)) {
                         synchronized (stateLock) {
-                            names = new ArrayList<>(clients.keySet());
+                            if (clients.get(username) == this) {
+                                send(onlineUsersLocked());
+                            }
                         }
-                        names.sort(String::compareTo);
-                        send("Online users: " + String.join(", ", names));
+                        continue;
+                    }
+                    // Wrapping every desktop message keeps text such as @logout ordinary chat.
+                    if (message.startsWith(ChatProtocol.SEND_PREFIX)) {
+                        message = message.substring(ChatProtocol.SEND_PREFIX.length());
+                    }
+                    if (!ChatProtocol.isAllowedText(message) || message.length() > ChatProtocol.MAX_MESSAGE_LENGTH) {
+                        send("Messages must contain at most " + ChatProtocol.MAX_MESSAGE_LENGTH
+                                + " characters and no control characters.");
+                    } else if (message.isBlank()) {
+                        send("Please enter a message.");
                     } else {
                         List<ClientHandler> failed = new ArrayList<>();
                         synchronized (stateLock) {
                             if (closed || disconnected.get() || clients.get(username) != this) {
                                 break;
                             }
-                            String formatted = username + ": " + message;
+                            ChatProtocol.ChatMessage entry = new ChatProtocol.ChatMessage(
+                                    System.currentTimeMillis(), username, message);
                             if (store != null) {
                                 try {
-                                    store.appendMessage(formatted);
+                                    store.appendMessage(ChatProtocol.encodeStoredMessage(entry));
                                 } catch (IOException e) {
                                     System.err.println("Cannot save chat message: " + e.getMessage());
                                     send("Message delivery could not be confirmed: server storage is unavailable.");
@@ -374,8 +386,8 @@ public final class ChatServer implements AutoCloseable {
                             if (history.size() == HISTORY_LIMIT) {
                                 history.removeFirst();
                             }
-                            history.addLast(formatted);
-                            broadcastLocked(formatted, null, failed);
+                            history.addLast(entry);
+                            broadcastLocked(ChatProtocol.encodeMessage(entry), null, failed);
                         }
                         disconnectSlowClients(failed);
                     }
@@ -391,7 +403,7 @@ public final class ChatServer implements AutoCloseable {
                 List<ClientHandler> failed = new ArrayList<>();
                 synchronized (stateLock) {
                     if (username != null && clients.remove(username, this) && !closed) {
-                        broadcastLocked(username + " has left the chat", this, failed);
+                        broadcastLocked(onlineUsersLocked(), null, failed);
                     }
                 }
                 disconnectSlowClients(failed);
@@ -679,16 +691,20 @@ public final class ChatServer implements AutoCloseable {
                     : "Welcome, " + username + "! You are now connected.")) {
                 failed.add(this);
             }
-            for (String previous : history) {
-                if (!outgoing.offer(previous)) {
+            if (!outgoing.offer(ChatProtocol.HISTORY_START)) {
+                failed.add(this);
+            }
+            for (ChatProtocol.ChatMessage previous : history) {
+                if (!outgoing.offer(ChatProtocol.encodeMessage(previous))) {
                     failed.add(this);
                     break;
                 }
             }
-            boolean wasConnected = clients.put(username, this) != null;
-            if (!wasConnected) {
-                broadcastLocked(username + " has joined the chat !", this, failed);
+            if (!outgoing.offer(ChatProtocol.HISTORY_END)) {
+                failed.add(this);
             }
+            clients.put(username, this);
+            broadcastLocked(onlineUsersLocked(), null, failed);
         }
 
         private boolean revokeSession() {

@@ -198,7 +198,7 @@ public final class ChatSessionTest {
         try (Fixture first = new Fixture(directory); Peer original = first.formPeer()) {
             submit(original, "signup", "LogoutUser", PASSWORD);
             session = authenticated(original, "LogoutUser");
-            original.send("/quit");
+            original.send(ChatProtocol.LOGOUT);
             original.expect("Goodbye.");
             original.awaitClosed();
         }
@@ -220,6 +220,10 @@ public final class ChatSessionTest {
             Session original = authenticated(owner, "TokenOwner");
             submit(other, "signup", "OtherOwner", PASSWORD);
             authenticated(other, "OtherOwner");
+            owner.until(line -> line.startsWith("Online users:")
+                    && line.contains("TokenOwner") && line.contains("OtherOwner"));
+            other.until(line -> line.startsWith("Online users:")
+                    && line.contains("TokenOwner") && line.contains("OtherOwner"));
             List<String> invalid = Arrays.asList("@resume", RESUME_PREFIX + "TokenOwner",
                     RESUME_PREFIX + "bad:name\t" + original.token,
                     RESUME_PREFIX + "TokenOwner\tshort",
@@ -230,11 +234,11 @@ public final class ChatSessionTest {
             for (String request : invalid) {
                 retry.send(request);
                 error(retry);
-                owner.send("/users");
+                owner.send(ChatProtocol.USERS_REQUEST);
                 String users = owner.until(line -> line.startsWith("Online users:")).last();
                 check(users.contains("TokenOwner") && users.contains("OtherOwner"),
                         "Invalid resume disrupted a legitimate account owner");
-                other.send("/users");
+                other.send(ChatProtocol.USERS_REQUEST);
                 other.until(line -> line.startsWith("Online users:"));
             }
             resume(retry, "TokenOwner", original.token);
@@ -312,7 +316,7 @@ public final class ChatSessionTest {
                         } catch (IOException expected) {
                             // A closed transport may reject the stale write immediately.
                         }
-                        next.send("/users");
+                        next.send(ChatProtocol.USERS_REQUEST);
                         Seen received = next.until(line -> line.startsWith("Online users:"));
                         check(received.last().contains("TakeoverUser"), "Old cleanup removed the new owner");
                         check(received.lines.stream().noneMatch(line -> line.startsWith("TakeoverUser: stale message")),
@@ -349,7 +353,7 @@ public final class ChatSessionTest {
                 Seen authentication = legacy.expect(ChatProtocol.FORM_OK_PREFIX + "LegacyUser");
                 check(authentication.lines.stream().noneMatch(line -> line.startsWith(SESSION_PREFIX)),
                         "Legacy forms received an unsupported session frame");
-                legacy.send("/quit");
+                legacy.send(ChatProtocol.LOGOUT);
                 legacy.expect("Goodbye.");
                 legacy.awaitClosed();
             }
@@ -405,7 +409,7 @@ public final class ChatSessionTest {
     private static void awaitOffline(Peer observer, String username) throws Exception {
         long deadline = System.nanoTime() + TIMEOUT_NANOS;
         do {
-            observer.send("/users");
+            observer.send(ChatProtocol.USERS_REQUEST);
             String users = observer.until(line -> line.startsWith("Online users:")).last();
             List<String> names = Arrays.asList(users.substring("Online users:".length()).trim().split("[, ]+"));
             if (!names.contains(username)) {
@@ -579,6 +583,16 @@ public final class ChatSessionTest {
                     throw (IOException) value;
                 }
                 String line = (String) value;
+                if (line.equals(ChatProtocol.HISTORY_START) || line.equals(ChatProtocol.HISTORY_END)) {
+                    continue;
+                }
+                if (line.startsWith(ChatProtocol.MESSAGE_PREFIX)) {
+                    ChatProtocol.ChatMessage entry = ChatProtocol.parseMessage(line);
+                    line = entry.username() + ": " + entry.text();
+                } else if (line.equals("@users") || line.startsWith(ChatProtocol.USERS_PREFIX)) {
+                    line = "Online users: " + (line.equals("@users") ? ""
+                            : line.substring(ChatProtocol.USERS_PREFIX.length()).replace("\t", ", "));
+                }
                 seen.add(line);
                 if (match.test(line)) {
                     return new Seen(seen);
