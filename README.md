@@ -6,38 +6,69 @@ you join. Accounts and recent messages are saved on disk and survive server rest
 
 Requires **JDK 11 or newer**. No dependencies or build tool are needed.
 
+## Project structure
+
+```text
+src/
+  main/java/chat/
+    client/                  Swing UI, chat view, and connection lifecycle
+    server/                  Socket server and persistent storage
+    protocol/                Shared wire protocol and validation
+  test/java/chat/
+    client/                  Client, form, and view regression tests
+    server/                  Server, storage, and session regression tests
+scripts/
+  build.ps1                  PowerShell compile/test script
+  build.sh                   Bash compile/test script
+docs/
+  AUDIT.md                   Audit findings and verification notes
+build/classes/               Generated main/ and test/ classes (ignored)
+server-data/                 Existing saved accounts/history/sessions (ignored)
+README.md
+```
+
+Java package names match their directories. Production and test classes compile
+separately, and generated files and private server data stay outside `src`.
+The reorganization does not move or change existing `server-data` files.
+
 ## Run
 
-From the project directory, compile the source files:
+From the project directory, compile with PowerShell:
 
 ```powershell
-javac --release 11 -encoding UTF-8 -d build *.java
+.\scripts\build.ps1
+```
+
+Or use Bash (Git Bash on Windows, Bash on Linux/macOS):
+
+```bash
+bash scripts/build.sh
 ```
 
 Start the server in one terminal:
 
 ```powershell
-java -cp build ChatServer
+java -cp build/classes/main chat.server.ChatServer
 ```
 
 Start a client in another terminal; run it again for more clients:
 
 ```powershell
-java -cp build ChatClient
+java -cp build/classes/main chat.client.ChatClient
 ```
 
 The defaults are `127.0.0.1:1903`. Optional arguments:
 
 ```powershell
-java -cp build ChatServer 1904
-java -cp build ChatClient 127.0.0.1 1904
+java -cp build/classes/main chat.server.ChatServer 1904
+java -cp build/classes/main chat.client.ChatClient 127.0.0.1 1904
 ```
 
 Server arguments are `[port] [bind-address] [data-directory]`. The default data
 directory is `server-data` in the current working directory. For example:
 
 ```powershell
-java -cp build ChatServer 1903 127.0.0.1 C:/chat-data
+java -cp build/classes/main chat.server.ChatServer 1903 127.0.0.1 C:/chat-data
 ```
 
 Restart from the same directory or pass the same data directory to restore your
@@ -47,8 +78,8 @@ To connect across a trusted LAN, bind the server explicitly and use its LAN IP o
 the other machine:
 
 ```powershell
-java -cp build ChatServer 1903 0.0.0.0
-java -cp build ChatClient 192.168.1.10 1903
+java -cp build/classes/main chat.server.ChatServer 1903 0.0.0.0
+java -cp build/classes/main chat.client.ChatClient 192.168.1.10 1903
 ```
 
 Replace the example address with the server's address. The server binds only to
@@ -143,22 +174,31 @@ and restart the server. Existing accounts and history are not automatically eras
 - The protocol is UTF-8 text with LF or CRLF line endings and a 4,096-character
   physical line limit. Atomic form submissions have explicit success/error responses.
   Chat messages, history replay, online-user snapshots, and logout use distinct
-  protocol frames. The client and server share framing/limits in `ChatProtocol.java`.
+  protocol frames. The client and server share framing/limits in
+  `src/main/java/chat/protocol/ChatProtocol.java`.
   The server still accepts interactive text authentication for simple socket clients.
 
 ## Check
 
-Compile with warnings enabled and run the dependency-free regression harness:
+Compile with warnings enabled and run all six dependency-free regression harnesses
+(72 test groups):
 
 ```powershell
-javac --release 11 -encoding UTF-8 -Xlint:all -d build *.java tests/*.java
-java -cp build ChatServerTest
-java -cp build ChatStoreTest
-java -cp build ChatConnectionTest
-java -cp build ChatClientFormTest
-java -cp build ChatViewTest
-java -cp build ChatSessionTest
+.\scripts\build.ps1 -Test
 ```
+
+Or with Bash:
+
+```bash
+bash scripts/build.sh --test
+```
+
+Both scripts compile for Java 11 with UTF-8 and `-Xlint:all`, stop on a failure,
+and keep application classes in `build/classes/main` and tests in
+`build/classes/test`. The scripts locate the project from their own path, so they
+also work when invoked from another directory. Run the `java` commands above from
+the project directory so the default data directory remains the same. Older loose
+`.class` files in `build` are not used by the new classpaths.
 
 Tests use ephemeral loopback ports, so a running server on port 1903 is unaffected.
 They cover validation, authentication disconnects, simultaneous signup/login,
@@ -176,4 +216,4 @@ that **Show password** reveals and hides both signup password fields. Confirm th
 online list updates when a second client joins or leaves, search filters incoming
 messages, and the unread title count clears when the window regains focus.
 
-See [AUDIT.md](AUDIT.md) for the original findings and fixes.
+See [docs/AUDIT.md](docs/AUDIT.md) for the original findings and fixes.

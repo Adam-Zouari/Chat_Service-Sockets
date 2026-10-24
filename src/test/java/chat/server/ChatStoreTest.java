@@ -1,3 +1,5 @@
+package chat.server;
+
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
@@ -112,7 +114,7 @@ public final class ChatStoreTest {
             String executable = System.getProperty("os.name").startsWith("Windows") ? "java.exe" : "java";
             Path javaExecutable = Path.of(System.getProperty("java.home"), "bin", executable);
             Process writer = new ProcessBuilder(javaExecutable.toString(), "-cp", System.getProperty("java.class.path"),
-                    "ChatStoreTest", "--crash-writer", directory.toString()).redirectErrorStream(true).start();
+                    ChatStoreTest.class.getName(), "--crash-writer", directory.toString()).redirectErrorStream(true).start();
             try {
                 check(writer.waitFor(10, TimeUnit.SECONDS), "Crash writer did not finish");
                 check(writer.exitValue() == 0, "Crash writer failed: "

@@ -1,3 +1,7 @@
+package chat.server;
+
+import chat.protocol.ChatProtocol;
+
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
@@ -173,7 +177,7 @@ public final class ChatServer implements AutoCloseable {
 
     public static void main(String[] args) {
         if (args.length > 3) {
-            System.err.println("Usage: java ChatServer [port] [bind-address] [data-directory]");
+            System.err.println("Usage: java -cp build/classes/main chat.server.ChatServer [port] [bind-address] [data-directory]");
             return;
         }
         try {

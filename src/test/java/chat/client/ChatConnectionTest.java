@@ -1,3 +1,8 @@
+package chat.client;
+
+import chat.protocol.ChatProtocol;
+import chat.server.ChatServer;
+
 import javax.swing.SwingUtilities;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -648,7 +653,7 @@ public final class ChatConnectionTest {
         Path output = directory.resolve("process.log");
         Process process = new ProcessBuilder(
                 Path.of(System.getProperty("java.home"), "bin", "java").toString(),
-                "-cp", System.getProperty("java.class.path"), "ChatServer", Integer.toString(port),
+                "-cp", System.getProperty("java.class.path"), ChatServer.class.getName(), Integer.toString(port),
                 "127.0.0.1", directory.toString())
                 .redirectErrorStream(true).redirectOutput(output.toFile()).start();
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);

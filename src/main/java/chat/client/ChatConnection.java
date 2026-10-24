@@ -1,3 +1,7 @@
+package chat.client;
+
+import chat.protocol.ChatProtocol;
+
 import javax.swing.SwingUtilities;
 import java.io.BufferedReader;
 import java.io.BufferedWriter;

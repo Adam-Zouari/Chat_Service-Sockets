@@ -1,3 +1,7 @@
+package chat.client;
+
+import chat.protocol.ChatProtocol;
+
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.ButtonGroup;
@@ -120,7 +124,7 @@ public final class ChatClient implements ChatConnection.Listener {
                 throw new IllegalArgumentException();
             }
         } catch (IllegalArgumentException invalidArguments) {
-            System.err.println("Usage: java ChatClient [host] [port (1-65535)]");
+            System.err.println("Usage: java -cp build/classes/main chat.client.ChatClient [host] [port (1-65535)]");
             return;
         }
         if (GraphicsEnvironment.isHeadless()) {

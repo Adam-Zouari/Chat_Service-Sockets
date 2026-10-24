@@ -1,0 +1,2 @@
+# Keep Bash scripts usable on every platform, including Windows checkouts.
+*.sh text eol=lf

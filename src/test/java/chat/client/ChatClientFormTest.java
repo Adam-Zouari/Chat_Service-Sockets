@@ -1,3 +1,7 @@
+package chat.client;
+
+import chat.protocol.ChatProtocol;
+
 import javax.imageio.ImageIO;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;

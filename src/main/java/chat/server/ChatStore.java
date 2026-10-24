@@ -1,3 +1,7 @@
+package chat.server;
+
+import chat.protocol.ChatProtocol;
+
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;

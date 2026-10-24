@@ -4,6 +4,18 @@ The project remains a dependency-free Java socket server and Swing client. Accou
 and the latest 500 messages are persisted in local files; there is no database,
 web service, or build framework.
 
+## Source layout
+
+Application sources now live in `src/main/java/chat/client`,
+`src/main/java/chat/server`, and `src/main/java/chat/protocol`; tests mirror their
+packages under `src/test/java/chat`. Build scripts live in `scripts`, and audit
+notes live in `docs`. Application and test bytecode are kept separately under
+`build/classes/main` and `build/classes/test`.
+
+This is an organizational change, with no new runtime dependencies or feature
+changes. The existing root `server-data` directory stays in place; accounts,
+history, and resumable sessions retain their existing file formats and location.
+
 ## Findings and fixes
 
 | Original issue | Change |
@@ -60,7 +72,9 @@ disconnected at the 60-second authentication deadline, while an authenticated id
 client remains connected and can send afterward.
 
 Compile with `--release 11 -Xlint:all` and run the harness using the commands in
-README.md. Desktop-client checks are described there as well.
+[README.md](../README.md). The PowerShell and Bash build scripts run all six
+regression harnesses (72 test groups). Desktop-client checks are described there
+as well.
 
 ## Remaining scope
 

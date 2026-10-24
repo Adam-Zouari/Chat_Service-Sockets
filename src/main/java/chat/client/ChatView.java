@@ -1,3 +1,7 @@
+package chat.client;
+
+import chat.protocol.ChatProtocol;
+
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
